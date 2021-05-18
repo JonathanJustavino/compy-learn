@@ -78,6 +78,7 @@ class GnnPytorchDGLModel(Model):
         self.model = self.model.to(self.device)
 
     def __process_data(self, data):
+        print("debug")
         return [
             {
                 "nodes": data["x"]["code_rep"].get_node_list(),

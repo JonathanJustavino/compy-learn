@@ -245,6 +245,12 @@ def test_llvm_graph_instructions_have_operands(llvm_extractor_fixture):
     assert instr_load.operands == [instr_alloca]
 
 
+def test_llvm_graph_branch_probabilities(llvm_extractor_fixture):
+    info = llvm_extractor_fixture.GraphFromString(program_1fn_2)
+    fn = info.functionInfos[0]
+    bb_entry = fn.basicBlocks[0]
+
+
 # Seq tests: General
 def test_llvm_seq_from_several_functions(llvm_extractor_fixture):
     info = llvm_extractor_fixture.SeqFromString(program_1fn_1)

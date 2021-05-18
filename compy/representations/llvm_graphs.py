@@ -8,6 +8,65 @@ from compy.representations.extractors.extractors import llvm
 from compy.representations import common
 
 
+class LLVMBPVisitorOld(Visitor):
+    def __init__(self):
+        Visitor.__init__(self)
+        self.edge_types = ["cfg", "prob"]
+        self.G = nx.MultiDiGraph()
+
+    def visit(self, v):
+        if isinstance(v, llvm.graph.FunctionInfo):
+            for arg in v.args:
+                self.G.add_node(arg, attr=(arg.type))
+
+        if isinstance(v, llvm.graph.BasicBlockInfo):
+            self.G.add_node(v, attr="bb")
+            for index, succ in enumerate(v.successors):
+                self.G.add_edge(v, succ, probability=v.probability[index], attr="prob")
+
+
+class LLVMBPVisitor(Visitor):
+    def __init__(self):
+        Visitor.__init__(self)
+        self.edge_types = ["cfg", "data", "mem", "prob"]
+        self.G = nx.MultiDiGraph()
+
+    def visit(self, v):
+        if isinstance(v, llvm.graph.FunctionInfo):
+            # Function arg nodes.
+            for arg in v.args:
+                self.G.add_node(arg, attr=(arg.type))
+
+            # Memory accesses edges.
+            for memacc in v.memoryAccesses:
+                if memacc.inst:
+                    for dep in memacc.dependencies:
+                        if dep.inst:
+                            self.G.add_edge(dep.inst, memacc.inst, attr="mem")
+
+        if isinstance(v, llvm.graph.BasicBlockInfo):
+            # CFG edges: Inner-BB.
+            instr_prev = v.instructions[0]
+            for instr in v.instructions[1:]:
+                self.G.add_edge(instr_prev, instr, attr="cfg")
+                instr_prev = instr
+
+            # CFG edges: Inter-BB
+            for index, succ in enumerate(v.successors):
+                self.G.add_edge(v.instructions[-1], succ.instructions[0], probability=v.probability[index], attr="prob")
+                # self.G.add_edge(v, succ, probability=v.probability[index], attr="prob")
+        if isinstance(v, llvm.graph.InstructionInfo):
+            # Instruction nodes.
+            self.G.add_node(v, attr=(v.opcode))
+
+            # Operands.
+            for operand in v.operands:
+                if isinstance(operand, llvm.graph.ArgInfo) or isinstance(
+                    operand, llvm.graph.InstructionInfo
+                ):
+                    self.G.add_edge(operand, v, attr="data")
+
+
 class LLVMCDFGVisitor(Visitor):
     def __init__(self):
         Visitor.__init__(self)
@@ -257,4 +316,6 @@ class LLVMGraphBuilder(common.RepresentationBuilder):
                 self._tokens[attr] = 1
             self._tokens[attr] += 1
 
-        return common.Graph(vis.G, self.get_tokens(), vis.edge_types)
+        graph = common.Graph(vis.G, self.get_tokens(), vis.edge_types)
+        print(graph)
+        return graph

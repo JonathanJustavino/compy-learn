@@ -122,6 +122,7 @@ struct BasicBlockInfo : IVisitee {
   std::string name;
   std::vector<InstructionInfoPtr> instructions;
   std::vector<BasicBlockInfoPtr> successors;
+  std::vector<uint32_t> edge_prob;
 
   void accept(IVisitor* v) override {
     v->visit(this);

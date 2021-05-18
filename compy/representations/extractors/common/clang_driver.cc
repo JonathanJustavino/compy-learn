@@ -272,11 +272,12 @@ void ClangDriver::runLLVMPasses(std::unique_ptr<::llvm::Module> Module,
                                 std::vector<::llvm::Pass *>& passes) {
   ::llvm::remove_fatal_error_handler();
 
-  // Register other llvm passes.
-  PassRegistry &reg = *PassRegistry::getPassRegistry();
-  initializeCallGraphWrapperPassPass(reg);
-  initializeMemorySSAWrapperPassPass(reg);
-  initializeStripSymbolsPass(reg);
+    // Register other llvm passes.
+    PassRegistry &reg = *PassRegistry::getPassRegistry();
+    initializeCallGraphWrapperPassPass(reg);
+    initializeMemorySSAWrapperPassPass(reg);
+    initializeStripSymbolsPass(reg);
+    initializeBranchProbabilityInfoWrapperPassPass(reg);
 
   // Setup the pass manager and add passes.
   pm_.reset(new legacy::PassManager());

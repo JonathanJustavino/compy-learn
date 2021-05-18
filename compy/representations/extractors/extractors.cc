@@ -218,7 +218,8 @@ void registerLLVMExtractor(py::module m_parent) {
       m_graph, "BasicBlockInfo")
       .def_readonly("name", &lg::BasicBlockInfo::name)
       .def_readonly("instructions", &lg::BasicBlockInfo::instructions)
-      .def_readonly("successors", &lg::BasicBlockInfo::successors);
+      .def_readonly("successors", &lg::BasicBlockInfo::successors)
+      .def_readonly("probability", &lg::BasicBlockInfo::edge_prob);
 
   py::class_<lg::FunctionInfo, std::shared_ptr<lg::FunctionInfo>>(
       m_graph, "FunctionInfo")

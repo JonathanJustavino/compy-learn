@@ -92,6 +92,7 @@ class Graph(object):
         self.__node_types_dict = {n: i for i, n in enumerate(node_types)}
         self.__edge_types = edge_types
 
+
     def _get_node_attr_dict(self):
         return collections.OrderedDict(self.G.nodes(data="attr", default="N/A"))
 
@@ -120,6 +121,39 @@ class Graph(object):
             )
 
         return edges
+
+    def get_edge_list_tuple(self):
+        #TODO: rework method to handle tuple as data attr and remove edge type tuple from LLVMBPVisitor
+
+        nodes_keys = list(self._get_node_attr_dict().keys())
+
+        edges = []
+        for node1, node2, data in self.G.edges(data=True):
+            edges.append(
+                (
+                    nodes_keys.index(node1),
+                    self.__edge_types.index(data["attr"]),
+                    nodes_keys.index(node2),
+                )
+            )
+        return edges
+
+    def get_edge_list_with_data(self):
+        nodes_keys = list(self._get_node_attr_dict().keys())
+
+        edges = []
+        for node1, node2, data in self.G.edges(data=True):
+            edges.append(
+                (
+                    nodes_keys.index(node1),
+                    self.__edge_types.index(data["attr"]),
+                    nodes_keys.index(node2),
+                    data,
+                )
+            )
+
+        return edges
+
 
     def get_leaf_node_list(self):
         """Return an ordered list of node indices for leaves of the graph.

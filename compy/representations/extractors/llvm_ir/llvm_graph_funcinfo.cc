@@ -4,6 +4,7 @@
 #include <sstream>
 
 #include "llvm/IR/Instructions.h"
+#include "llvm/Analysis/BranchProbabilityInfo.h"
 
 using namespace ::llvm;
 
@@ -142,10 +143,17 @@ BasicBlockInfoPtr FunctionInfoPass::getInfo(const BasicBlock &bb) {
 
   info->name = getUniqueName(bb);
 
+  auto &bpi_wrapper = getAnalysis<BranchProbabilityInfoWrapperPass>();
+  auto &bpi = bpi_wrapper.getBPI();
+
   // collect all successors
   auto term = bb.getTerminator();
   for (size_t i = 0; i < term->getNumSuccessors(); i++) {
     BasicBlock *succ = term->getSuccessor(i);
+    uint32_t numerator = bpi.getEdgeProbability(&bb, succ).getNumerator();
+    uint32_t denominator = bpi.getEdgeProbability(&bb, succ).getDenominator();
+    double probability = rint(((double)numerator / denominator) * 100.0 * 100.0) / 100.0;
+    info->edge_prob.push_back(probability);
     info->successors.push_back(getInfo(*succ));
   }
 
@@ -257,6 +265,7 @@ bool FunctionInfoPass::runOnFunction(::llvm::Function &func) {
 
 void FunctionInfoPass::getAnalysisUsage(AnalysisUsage &au) const {
   au.addRequired<MemorySSAWrapperPass>();
+  au.addRequired<BranchProbabilityInfoWrapperPass>();
   au.setPreservesAll();
 }
 
