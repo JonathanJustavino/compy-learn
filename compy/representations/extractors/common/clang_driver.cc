@@ -236,6 +236,7 @@ void ClangDriver::Invoke(std::string src,
     initializeCallGraphWrapperPassPass(reg);
     initializeMemorySSAWrapperPassPass(reg);
     initializeStripSymbolsPass(reg);
+      initializeBranchProbabilityInfoWrapperPassPass(reg);
 
     // Setup the pass manager and add passes.
     pm_.reset(new legacy::PassManager());

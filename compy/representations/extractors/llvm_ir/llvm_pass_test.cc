@@ -24,6 +24,7 @@ class LLVMGraphPassFixture : public testing::Test {
     PassRegistry& reg = *PassRegistry::getPassRegistry();
     initializeCallGraphWrapperPassPass(reg);
     initializeMemorySSAWrapperPassPass(reg);
+    initializeBranchProbabilityInfoWrapperPassPass(reg);
 
     // Setup the pass manager, add pass
     _pm = new legacy::PassManager();
