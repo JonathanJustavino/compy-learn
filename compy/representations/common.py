@@ -264,6 +264,10 @@ class Graph(object):
                 edge_colors_by_types[edge_type] = edge_colors_available.pop(0)
 
             G[u][v][key]["color"] = edge_colors_by_types[edge_type]
+            # if edge_type is "prob":
+            #     G.nodes[u]["label"] = f"{G.nodes[u]['label']} - {data['probability']}"
+#            if edge_type is "prob":
+#                G[u][v][key]["label"] = data['probability']
 
             # G[u][v][key]['weight'] = 10 if edge_type == 'cfg' else 0
 

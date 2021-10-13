@@ -177,7 +177,7 @@ class LLVMCDFGCallVisitor(Visitor):
             instr_prev = v.instructions[0]
             for instr in v.instructions[1:]:
                 self.G.add_edge(instr_prev, instr, attr="cfg")
-                instr_prev = instrg
+                instr_prev = instr
 
             # CFG edges: Inter-BB
             for succ in v.successors:
