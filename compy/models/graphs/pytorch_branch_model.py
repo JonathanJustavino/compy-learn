@@ -33,8 +33,7 @@ class Net(torch.nn.Module):
     ):
         x, edge_index, batch, index = graph.x, graph.edge_index, graph.batch, graph.source_nodes
         indices = [node_idx for sublist in index for node_idx in sublist]
-        idx = self.__filter_branch_pairs(indices)
-        idx = torch.LongTensor(idx)
+        idx = torch.LongTensor(indices)
 
         x = self.reduce(x)
         x = self.gconv(x, edge_index)
@@ -44,18 +43,6 @@ class Net(torch.nn.Module):
         x = torch.sigmoid(x)
 
         return x
-
-    def __filter_branch_pairs(self, probabilities):
-        filtered = []
-        if len(probabilities) == 0:
-            return filtered
-        previous = probabilities[-1]
-        for index in probabilities:
-            if index == previous:
-                continue
-            filtered.append(index)
-            previous = index
-        return filtered
 
 
 class GnnPytorchBranchProbabilityModel(Model):
@@ -89,6 +76,7 @@ class GnnPytorchBranchProbabilityModel(Model):
     def __build_pg_graphs(self, batch_graphs):
         pg_graphs = []
         total_node_count = 0
+        previous_source_node = 0
 
         # Graph
         for graph_index, batch_graph in enumerate(batch_graphs):
@@ -108,11 +96,17 @@ class GnnPytorchBranchProbabilityModel(Model):
                 source_node = edge[0]
                 # edge_type = edge[1]
                 edge_index.append([source_node, edge[2]])
-                edge_features.append(edge_type)             # edge type
+                edge_features.append(edge_type)
 
                 if probability in last_element and edge_type == 5:
-                    source_nodes.append(source_node)
-                    probability_list.append(last_element[probability])
+                    if source_node == previous_source_node:
+                        previous_idx = len(probability_list) - 1
+                        previous_prob = probability_list[previous_idx]
+                        probability_list[previous_idx] = (probability_list[previous_idx], last_element[probability])
+                    else:
+                        source_nodes.append(source_node)
+                        probability_list.append(last_element[probability])
+                    previous_source_node = source_node
 
             # Probability Nodes
             edge_index = torch.tensor(edge_index, dtype=torch.long)
@@ -122,9 +116,6 @@ class GnnPytorchBranchProbabilityModel(Model):
             total_node_count += node_count
             source_nodes = [source_node + total_node_count for source_node in source_nodes]
 
-            #FIXME was ist das Problem hier, warum macht es hier nicht sinn, das zweimalige aufkommen eines indizes
-            # hintereinander, herauszufiltern
-            # probability_list = self._filter_branch_pairs(probability_list)
             edge_probabilities = self.__get_probability_tensor(probability_list)
 
             graph = Data(
@@ -139,35 +130,16 @@ class GnnPytorchBranchProbabilityModel(Model):
 
         return pg_graphs
 
-    def __filter_branch_pairs(self, probabilities):
-        filtered = []
-        if len(probabilities) == 0:
-            return filtered
-        previous = probabilities[-1]
-        for index in probabilities:
-            if index == previous:
-                continue
-            filtered.append(index)
-            previous = index
-        return filtered
-
-    def __get_probability_tensor(self, probabilities, skip_pair=False):
+    def __get_probability_tensor(self, probabilities):
         edge_probabilities = []
-        length = len(probabilities)
         for index, prob in enumerate(probabilities):
-            if skip_pair:
-                skip_pair = False
-                continue
             if prob == 100:
                 edge_probabilities.append([prob, 0])
+                continue
             if prob == 0:
                 edge_probabilities.append([prob, 100])
-            elif index + 1 < length:
-                pair_prob = probabilities[index + 1]
-                total_probability = prob + pair_prob
-                if 99 <= total_probability <= 100:
-                    edge_probabilities.append([prob, pair_prob])
-                    skip_pair = True
+                continue
+            edge_probabilities.append([prob[0], prob[1]])
         return torch.tensor(edge_probabilities, dtype=torch.float) / 100
 
     def _train_init(self, data_train, data_valid):
