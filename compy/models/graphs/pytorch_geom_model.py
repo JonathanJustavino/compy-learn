@@ -82,7 +82,7 @@ class GnnPytorchGeomModel(Model):
             one_hot[np.arange(len(batch_graph["nodes"])), batch_graph["nodes"]] = 1
             x = torch.tensor(one_hot, dtype=torch.float)
 
-            # -edges
+            # - edges
             edge_index, edge_features = [], []
             for edge in batch_graph["edges"]:
                 edge_index.append([edge[0], edge[2]])
