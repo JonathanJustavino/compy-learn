@@ -49,7 +49,7 @@ class GnnPytorchBranchProbabilityModel(Model):
     def __init__(self, config=None, num_types=None):
         if not config:
             config = {
-                "num_timesteps": 4,
+                "num_timesteps": 3,
                 "hidden_size_orig": num_types,
                 "gnn_h_size": 64,
                 "learning_rate": 0.001,
@@ -101,7 +101,6 @@ class GnnPytorchBranchProbabilityModel(Model):
                 if probability in last_element and edge_type == 5:
                     if source_node == previous_source_node:
                         previous_idx = len(probability_list) - 1
-                        previous_prob = probability_list[previous_idx]
                         probability_list[previous_idx] = (probability_list[previous_idx], last_element[probability])
                     else:
                         source_nodes.append(source_node)
@@ -154,6 +153,8 @@ class GnnPytorchBranchProbabilityModel(Model):
         loader = DataLoader(graph, batch_size=batch_size)
         batch_loss = 0
         correct_sum = 0
+        distance = 0
+        euclidian = 0
 
         for data in loader:
             data = data.to(self.device)
@@ -171,23 +172,40 @@ class GnnPytorchBranchProbabilityModel(Model):
 
             batch_loss += loss
             correct_sum += pred.max(dim=1)[1].eq(truth.view(-1)).sum().item()
+            # pred
+            correct_sum += (truth - pred_left).sum().item()
+            euclidian += sum(((truth - pred)**2).reshape(-1))
+
 
         train_accuracy = correct_sum / len(loader.dataset)
         train_loss = batch_loss / len(loader.dataset)
+        distance /= len(loader.dataset)
+        euclidian /= len(loader.dataset)
+        print("eculidian", f"{euclidian}\t", end="")
         return train_loss, train_accuracy
 
     def _predict_with_batch(self, batch):
         correct = 0
         graphs = self.__build_pg_graphs(batch)
         loader = DataLoader(graphs, batch_size=999999)
+        batch_loss = 0
         for data in loader:
             data = data.to(self.device)
 
             with torch.no_grad():
                 pred = self.model(data)
+                pred_left = pred[:, 0]
+                truth = data.y[:, 0]
+                loss = F.mse_loss(pred_left, truth)
+                batch_loss += loss
                 truth = data.y[:, 0] if data.y.nelement() > 0 else data.y
 
             correct += pred.max(dim=1)[1].eq(truth.view(-1)).sum().item()
+            correct += (truth - pred_left).sum().item()
+
         valid_accuracy = correct / len(loader.dataset)
+        valid_loss = batch_loss / len(loader.dataset)
+        print("valid loss", f"{valid_loss}")
+        # distance /= len(loader.dataset)
 
         return valid_accuracy, pred
