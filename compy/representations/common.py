@@ -296,3 +296,9 @@ class Graph(object):
 
         graphviz_graph.layout("dot")
         return graphviz_graph.draw(path)
+
+    def relabel_nodes_to_ints(self):
+        mapping = {}
+        for i, n in enumerate(self.G.nodes()):
+            mapping[n] = i
+        self.G = nx.relabel_nodes(self.G, mapping)

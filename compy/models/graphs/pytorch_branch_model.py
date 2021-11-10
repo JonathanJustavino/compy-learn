@@ -176,7 +176,6 @@ class GnnPytorchBranchProbabilityModel(Model):
             correct_sum += (truth - pred_left).sum().item()
             euclidian += sum(((truth - pred)**2).reshape(-1))
 
-
         train_accuracy = correct_sum / len(loader.dataset)
         train_loss = batch_loss / len(loader.dataset)
         distance /= len(loader.dataset)
