@@ -16,7 +16,6 @@ class LLVMBPVisitor(Visitor):
         self.G = nx.MultiDiGraph()
         self.functions = {}
 
-
     def visit(self, v):
         if isinstance(v, llvm.graph.FunctionInfo):
             # Function root node.
@@ -44,7 +43,6 @@ class LLVMBPVisitor(Visitor):
                 self.G.add_edge(instr_prev, instr, attr="cfg")
                 instr_prev = instr
             self.G.add_node(instr_prev, attr=f"{v.probability}")
-
 
             # CFG edges: Inter-BB
             for index, succ in enumerate(v.successors):
