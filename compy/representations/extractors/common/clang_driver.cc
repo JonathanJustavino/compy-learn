@@ -241,10 +241,10 @@ void ClangDriver::Invoke(std::string src,
 
     // Setup the pass manager and add passes.
     pm_.reset(new legacy::PassManager());
+    pm_->add(createLowerSwitchPass());
     for (auto pass : passes) {
       pm_->add(pass);
     }
-    pm_->add(createLowerSwitchPass());
 
 
     // Run passes.
