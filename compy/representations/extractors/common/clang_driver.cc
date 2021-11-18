@@ -282,10 +282,10 @@ void ClangDriver::runLLVMPasses(std::unique_ptr<::llvm::Module> Module,
 
     // Setup the pass manager and add passes.
     pm_.reset(new legacy::PassManager());
+    pm_->add(createLowerSwitchPass());
     for (auto pass : passes) {
       pm_->add(pass);
     }
-    pm_->add(createLowerSwitchPass());
 
 
   // Run passes.
