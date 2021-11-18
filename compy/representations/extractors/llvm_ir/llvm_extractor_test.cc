@@ -172,6 +172,22 @@ TEST_F(LLVMExtractorCPlusPlusFixture, ExtractFromFunctionWithUserInclude) {
   ASSERT_EQ(info->functionInfos[0]->args.size(), 0UL);
 }
 
+TEST_F(LLVMExtractorCFixture, ExtractFromSwitch) {
+    graph::ExtractionInfoPtr info = extractor_->GraphFromString(kProgram6);
+
+    bool hasSwitch = false;
+    for(auto function : info->functionInfos) {
+        for(auto basicBlock : function->basicBlocks) {
+            for (auto instr : basicBlock->instructions) {
+                if(instr->opcode == "switch") {
+                    hasSwitch = true;
+                }
+            }
+        }
+    }
+    ASSERT_FALSE(hasSwitch);
+}
+
 // LLVM tests
 TEST_F(LLVMExtractorLLVMFixture, ExtractFromFunction1) {
   graph::ExtractionInfoPtr info = extractor_->GraphFromString(kLLVM1);
