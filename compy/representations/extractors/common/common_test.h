@@ -35,6 +35,16 @@ constexpr char kProgram5[] =
     "  return max(1, x);\n"
     "}";
 
+constexpr char kProgram6[] =
+        "int max(int a, int b) {\n"
+        "  switch (a) {\n"
+        "    case 1: return 5; break;\n"
+        "    case 2: return 6; break;\n"
+        "    case 3: return 7; break;\n"
+        "    default: return -1;\n"
+        "  }\n"
+        "}";
+
 // LLVM samples
 constexpr char kLLVM1[] =
     "define dso_local void @A(i32*) #0 {\n"
