@@ -5,9 +5,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from torch import nn
-from dgl import function as dglF
 from torch_geometric.nn import GatedGraphConv
-from torch_geometric.nn import GlobalAttention
 from torch_geometric.data import Data
 from torch_geometric.data import DataLoader
 
@@ -76,7 +74,8 @@ class GnnPytorchBranchProbabilityModel(Model):
     def __build_pg_graphs(self, batch_graphs):
         pg_graphs = []
         total_node_count = 0
-        previous_source_node = 0
+        previous_source_node = -1
+        #FIXME Determine why the learning process is so slow
 
         # Graph
         for graph_index, batch_graph in enumerate(batch_graphs):
@@ -105,7 +104,7 @@ class GnnPytorchBranchProbabilityModel(Model):
                     else:
                         source_nodes.append(source_node)
                         probability_list.append(last_element[probability])
-                    previous_source_node = source_node
+                previous_source_node = source_node
 
             # Probability Nodes
             edge_index = torch.tensor(edge_index, dtype=torch.long)
@@ -171,7 +170,7 @@ class GnnPytorchBranchProbabilityModel(Model):
             self.opt.step()
 
             batch_loss += loss
-            correct_sum += pred.max(dim=1)[1].eq(truth.view(-1)).sum().item()
+            #correct_sum += pred.max(dim=1)[1].eq(truth.view(-1)).sum().item()
             # pred
             correct_sum += (truth - pred_left).sum().item()
             euclidian += sum(((truth - pred)**2).reshape(-1))
@@ -181,8 +180,9 @@ class GnnPytorchBranchProbabilityModel(Model):
         train_loss = batch_loss / len(loader.dataset)
         distance /= len(loader.dataset)
         euclidian /= len(loader.dataset)
-        print("eculidian", f"{euclidian}\t", end="")
-        return train_loss, train_accuracy
+        # print("eculidian", f"{euclidian}\t")
+        # print("train")
+        return train_loss, euclidian
 
     def _predict_with_batch(self, batch):
         correct = 0
@@ -194,6 +194,10 @@ class GnnPytorchBranchProbabilityModel(Model):
 
             with torch.no_grad():
                 pred = self.model(data)
+                #FIXME maybe this part slows it down
+                size = pred.shape[0]
+                if size <= 1:
+                    continue
                 pred_left = pred[:, 0]
                 truth = data.y[:, 0]
                 loss = F.mse_loss(pred_left, truth)
@@ -205,7 +209,16 @@ class GnnPytorchBranchProbabilityModel(Model):
 
         valid_accuracy = correct / len(loader.dataset)
         valid_loss = batch_loss / len(loader.dataset)
-        print("valid loss", f"{valid_loss}")
+        # print("valid loss", f"{valid_loss}")
         # distance /= len(loader.dataset)
 
-        return valid_accuracy, pred
+        return valid_accuracy, valid_loss
+
+
+def get_edge_types(graph):
+    types = []
+    for edge in graph["probability"]:
+        value = edge[-1]["attr"]
+        if value not in types:
+            types.append(value)
+    return types

@@ -7,6 +7,18 @@ from compy import models as M
 from compy import representations as R
 from compy.representations.extractors import ClangDriver
 
+from compy.datasets.anghabench import AnghabenchDataset
+from compy.datasets import dataflow_preprocess
+from compy.datasets.dataflow_preprocess import main as dataflow_main
+
+
+dataset_path = '/home/john/Documents/workspace/Studium/Masterarbeit/angha_dataset/ExtractGraphsTask/'
+FLAGS = flags.FLAGS
+FLAGS.out_dir = dataset_path
+FLAGS.preprocess = True
+FLAGS.eliminate_data_duplicates = True
+FLAGS.debug = True
+
 
 # Load dataset
 dataset = D.OpenCLDevmapDataset()
@@ -39,6 +51,7 @@ combinations = [
 for builder, visitor, model in combinations:
     print("Processing %s-%s-%s" % (builder.__name__, visitor.__name__, model.__name__))
 
+
     # Build representation
     clang_driver = ClangDriver(
         ClangDriver.ProgrammingLanguage.OpenCL,
@@ -53,10 +66,52 @@ for builder, visitor, model in combinations:
     split = kf.split(data["samples"], [sample["info"][5] for sample in data["samples"]])
     for train_idx, test_idx in split:
         model = model(num_types=data["num_types"])
-        train_summary = model.train(
-            list(np.array(data["samples"])[train_idx]),
-            list(np.array(data["samples"])[test_idx]),
-        )
-        print(train_summary)
 
-        break
+    if PREPROCESS_FLAG:
+        # Build representation
+        clang_driver = ClangDriver(
+            ClangDriver.ProgrammingLanguage.OpenCL,
+            ClangDriver.OptimizationLevel.O3,
+            [(x, ClangDriver.IncludeDirType.User) for x in dataset.additional_include_dirs],
+            ["-xcl", "-target", "x86_64-pc-linux-gnu"],
+        )
+        #TODO: nachschauen ob der preprocess jedes mal passiert
+        data = dataset.preprocess(builder(clang_driver), visitor, ["amd-app-sdk-3.0"])
+        # Train and test
+        kf = StratifiedKFold(n_splits=10, shuffle=True, random_state=204)
+        split = kf.split(data["samples"], [sample["info"][5] for sample in data["samples"]])
+
+        for train_idx, test_idx in split:
+            model = model(num_types=data["num_types"])
+            train_summary = model.train(
+                list(np.array(data["samples"])[train_idx]),
+                list(np.array(data["samples"])[test_idx]),
+            )
+            print(train_summary)
+
+            break
+    else:
+        #TODO return data in a dict with samples key and maybe "info", "x", "y", "num_types" as subkeys?
+        #data = dataset.load_graphs()
+
+        clang_driver = ClangDriver(
+            ClangDriver.ProgrammingLanguage.C,
+            ClangDriver.OptimizationLevel.O3,
+            [],
+            [],
+        )
+
+
+        data = dataset.load_graphs()
+        #TODO diese preprocess verwenden!!!!
+        # data = dataset.preprocess(builder(clang_driver), visitor)
+
+        print("ABC")
+        dataset_length = len(data["samples"])
+        test_range = round(float(dataset_length) * 0.1)
+        train_idx = round(dataset_length - test_range)
+        train_samples = data["samples"][0:train_idx]
+        test_samples = data["samples"][train_idx:dataset_length]
+        #FIXME Where can the num_type be efficiently computed form?
+        num_types = 43
+        model = model(num_types=num_types)
