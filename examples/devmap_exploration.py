@@ -17,15 +17,11 @@ from compy.datasets.dataflow_preprocess import main as dataflow_main
 
 dataset_path = '/home/john/Documents/workspace/Studium/Masterarbeit/angha_dataset/ExtractGraphsTask/'
 FLAGS = flags.FLAGS
-FLAGS.outdir = dataset_path
+FLAGS.out_dir = dataset_path
 FLAGS.preprocess = True
 FLAGS.eliminate_data_duplicates = True
+FLAGS.debug = True
 
-
-app.run(dataflow_main)
-
-
-exit()
 
 # Load dataset
 ANGHA_FLAG = True
@@ -74,6 +70,7 @@ for builder, visitor, model in combinations:
             [(x, ClangDriver.IncludeDirType.User) for x in dataset.additional_include_dirs],
             ["-xcl", "-target", "x86_64-pc-linux-gnu"],
         )
+        #TODO: nachschauen ob der preprocess jedes mal passiert
         data = dataset.preprocess(builder(clang_driver), visitor, ["amd-app-sdk-3.0"])
         # Train and test
         kf = StratifiedKFold(n_splits=10, shuffle=True, random_state=204)
@@ -99,10 +96,13 @@ for builder, visitor, model in combinations:
             [],
         )
 
+
         data = dataset.load_graphs()
+        #TODO diese preprocess verwenden!!!!
         # data = dataset.preprocess(builder(clang_driver), visitor)
 
-        dataset_length = len(data['samples'])
+        print("ABC")
+        dataset_length = len(data["samples"])
         test_range = round(float(dataset_length) * 0.1)
         train_idx = round(dataset_length - test_range)
         train_samples = data["samples"][0:train_idx]
