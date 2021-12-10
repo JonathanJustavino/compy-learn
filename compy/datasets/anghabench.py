@@ -38,26 +38,16 @@ class AnghabenchDataset(dataset.Dataset):
     def load_graphs(self):
         graphs = []
         pickles = os.listdir(self.content_dir)
-        filename = f"{self.content_dir}0.pickle"
-        with open(filename, "rb") as f:
-            collection = pickle.load(f)
-            for sample in collection:
-                graphs.append(sample)
+        for file in pickles:
+            filename = f"{self.content_dir}{file}"
+            with open(filename, "rb") as f:
+                collection = pickle.load(f)
+                for sample in collection:
+                    graphs.append(sample)
 
-        # for filename in pickles:
-        #     file_path = f"{self.content_dir}{filename}"
-        #     with open(file_path, "rb") as f:
-        #         collection = pickle.load(f)
-        #         for sample in collection:
-        #             graphs.append(sample)
         return {
-            "samples": [
-                {
-                    "x": {"code_rep": sample["code_rep"]},
-                    "info": sample["name"]
-                }
-                for sample in graphs
-            ]
+            "samples": graphs,
+            "num_types": 1
         }
 
     def load_graphs_whole(self):
@@ -73,7 +63,6 @@ class AnghabenchDataset(dataset.Dataset):
         return {
             "samples": [
                 {
-                    #"info": graph
                     "x": {"code_rep": sample["code_rep"]},
                 }
                 for sample in graphs
@@ -83,7 +72,7 @@ class AnghabenchDataset(dataset.Dataset):
     def preprocess(self, builder, visitor, start_at=False, num_samples=None, randomly_select_samples=False):
         samples = {}
 
-        filenames = get_all_src_files(self.content_dir, file_ending='.pickle')
+        filenames = get_all_src_files(self.content_dir, file_ending='.c')
 
         if start_at:
             filenames = filenames[start_at:]
@@ -96,22 +85,16 @@ class AnghabenchDataset(dataset.Dataset):
 
         for filename in tqdm(filenames, desc="Source Code -> IR+ -> Graph"):
             with open(filename, "rb") as f:
-                # source_code = f.read()
-                source_code = pickle.load(f)
+                source_code = f.read()
 
-                # for code_rep in source_code:
-                #     extractionInfo = builder.string_to_info(code_rep)
-                #     sample = builder.info_to_representation(extractionInfo, visitor)
+                try:
+                    extractionInfo = builder.string_to_info(source_code)
+                    sample = builder.info_to_representation(extractionInfo, visitor)
 
-
-            #try:
-            #    extractionInfo = builder.string_to_info(source_code)
-            #    sample = builder.info_to_representation(extractionInfo, visitor)
-
-            #    samples[filename] = sample
-            #except Exception as e:
-            #    print(e)
-            #    print('WARNING: Exception occurred while preprocessing sample: %s' % filename)
+                    samples[filename] = sample
+                except Exception as e:
+                   print(e)
+                   print('WARNING: Exception occurred while preprocessing sample: %s' % filename)
 
         return {
             "samples": [
