@@ -39,7 +39,7 @@ flags.DEFINE_bool('eliminate_data_duplicates', False, 'Eliminate duplicates base
 
 dataset_path = '/home/john/Documents/workspace/Studium/Masterarbeit/angha_dataset/ExtractGraphsTask/'
 
-flags.DEFINE_string('out_dir', dataset_path, 'Root dir to store the results.')
+flags.DEFINE_string('out_dir', '', 'Root dir to store the results.')
 flags.DEFINE_bool('debug', False, 'Single-process mode for debugging.')
 FLAGS = flags.FLAGS
 
@@ -160,9 +160,12 @@ class ExtractGraphsTask(MultiProcessedTask):
 
             code_rep.relabel_nodes_to_ints()
 
+            #FIXME debug wether d['info'] holds more information than name
+            # in order to be able to shape the angha dataset like the opencldevmap
+            # todo repo doppeln für paralleles debugging
             samples.append({
-                "code_rep": code_rep,
-                "name": name})
+                "x": {"code_rep": code_rep},
+                "info": name})
 
         return samples
 
