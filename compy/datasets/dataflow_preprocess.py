@@ -616,7 +616,7 @@ def main(argv):
     # Complete pipeline
     if FLAGS.preprocess:
         tasks = common_tasks + duplicate_ele_tasks + analysis_tasks
-        tasks = common_tasks
+        tasks = common_tasks + duplicate_ele_tasks
         # tasks = analysis_tasks
     elif FLAGS.stats:
         tasks = stats_tasks
