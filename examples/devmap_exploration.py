@@ -15,12 +15,12 @@ from compy.datasets import dataflow_preprocess
 from compy.datasets.dataflow_preprocess import main as dataflow_main
 
 
-dataset_path = '/home/john/Documents/workspace/Studium/Masterarbeit/angha_dataset/ExtractGraphsTask/'
+dataset_path = '/net/home/luederitz/anghabench'
 FLAGS = flags.FLAGS
 FLAGS.out_dir = dataset_path
 FLAGS.preprocess = True
 FLAGS.eliminate_data_duplicates = True
-FLAGS.debug = True
+FLAGS.debug = False
 
 
 # Load dataset
@@ -31,6 +31,9 @@ dataset = D.OpenCLDevmapDataset()
 if ANGHA_FLAG:
     dataset = AnghabenchDataset()
     dataset.set_content_dir(dataset_path)
+    app.run(dataflow_main)
+
+exit()
 
 #TODO einen fixen split 10% test 90% training
 # funktion schreiben die die samples direkt lädt und testen

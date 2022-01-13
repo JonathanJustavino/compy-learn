@@ -352,5 +352,5 @@ class LLVMGraphBuilder(common.RepresentationBuilder):
             self._tokens[attr] += 1
 
         graph = common.Graph(vis.G, self.get_tokens(), vis.edge_types)
-        graph.draw('/home/john/Documents/workspace/Studium/Masterarbeit/g_debug/abc.png')
+        graph.draw('/net/home/luederitz/g_debug/abc.png')
         return graph
