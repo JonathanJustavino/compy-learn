@@ -3,7 +3,7 @@ import pytest
 from compy.datasets import AnghabenchDataset
 from compy.representations import RepresentationBuilder
 
-g
+
 class objectview(object):
     def __init__(self, d):
         self.__dict__ = d
