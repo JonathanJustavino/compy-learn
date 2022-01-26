@@ -30,7 +30,6 @@ PREPROCESS_FLAG = not ANGHA_FLAG
 dataset = D.OpenCLDevmapDataset()
 if ANGHA_FLAG:
     dataset = AnghabenchDataset()
-    dataset.set_content_dir(dataset_path)
     app.run(dataflow_main)
 
 exit()

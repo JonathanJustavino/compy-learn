@@ -30,11 +30,6 @@ class AnghabenchDataset(dataset.Dataset):
         filenames = get_all_src_files(self.content_dir)
         return len(filenames)
 
-    def set_content_dir(self, content_dir):
-        print("Previous content dir:", self.content_dir)
-        self.content_dir = content_dir
-        print("Current content dir:", self.content_dir)
-
     def load_graphs(self):
         graphs = []
         pickles = os.listdir(self.content_dir)
