@@ -5,6 +5,7 @@ import networkx as nx
 import pickle
 import sys
 import uuid
+import fnmatch
 
 import tqdm
 from absl import app
@@ -633,6 +634,10 @@ def store(data, filename):
     os.makedirs(os.path.dirname(filename), exist_ok=True)
     with open(filename, "wb") as f:
         pickle.dump(data, f)
+
+
+def get_pickle_files(in_dir):
+    return fnmatch.filter(os.listdir(in_dir), "*.pickle")
 
 
 if __name__ == "__main__":
