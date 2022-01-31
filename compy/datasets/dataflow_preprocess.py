@@ -168,7 +168,10 @@ class ExtractGraphsTask(MultiProcessedTask):
                 "x": {"code_rep": code_rep},
                 "info": name})
 
-        return samples
+        return {
+            "samples": samples,
+            "num_types": data["num_types"]
+        }
 
 
 class SortByGraphSizeTask(MultiProcessedTask):

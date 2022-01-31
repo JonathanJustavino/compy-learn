@@ -30,11 +30,18 @@ class AnghabenchDataset(dataset.Dataset):
         filenames = get_all_src_files(self.content_dir)
         return len(filenames)
 
+    def get_pickle_dir(self):
+        pickle_dir = os.environ.get('ANGHA_PICKLE_DIR')
+        return pickle_dir
+
     def load_graphs(self):
         graphs = []
-        pickles = os.listdir(self.content_dir)
-        for file in pickles:
-            filename = f"{self.content_dir}{file}"
+        pickle_path = self.get_pickle_dir()
+        debug_max_len = 1000
+        pickles = os.listdir(pickle_path)
+        pickles = pickles[:debug_max_len]
+        for file in tqdm(pickles, desc="Accumulating graphs"):
+            filename = f"{pickle_path}{file}"
             with open(filename, "rb") as f:
                 collection = pickle.load(f)
                 for sample in collection:
@@ -47,9 +54,10 @@ class AnghabenchDataset(dataset.Dataset):
 
     def load_graphs_whole(self):
         graphs = []
-        pickle_files = os.listdir(self.content_dir)
+        pickle_path = self.get_pickle_dir()
+        pickle_files = os.listdir(pickle_path)
         for pickle_file in pickle_files:
-            file_path = f"{self.content_dir}{pickle_file}"
+            file_path = f"{self.pickle_path}{pickle_file}"
             with open(file_path, "rb") as file:
                 graph = pickle.load(file)
                 graphs.append(graph)
