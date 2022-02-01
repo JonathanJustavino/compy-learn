@@ -37,39 +37,22 @@ class AnghabenchDataset(dataset.Dataset):
     def load_graphs(self):
         graphs = []
         pickle_path = self.get_pickle_dir()
-        debug_max_len = 1000
+        debug_max_len = 500
         pickles = os.listdir(pickle_path)
         pickles = pickles[:debug_max_len]
+        num_types = 0
         for file in tqdm(pickles, desc="Accumulating graphs"):
             filename = f"{pickle_path}{file}"
             with open(filename, "rb") as f:
                 collection = pickle.load(f)
-                for sample in collection:
+                if num_types < collection["num_types"]:
+                    num_types = collection["num_types"]
+                for sample in collection["samples"]:
                     graphs.append(sample)
 
         return {
             "samples": graphs,
-            "num_types": 1
-        }
-
-    def load_graphs_whole(self):
-        graphs = []
-        pickle_path = self.get_pickle_dir()
-        pickle_files = os.listdir(pickle_path)
-        for pickle_file in pickle_files:
-            file_path = f"{self.pickle_path}{pickle_file}"
-            with open(file_path, "rb") as file:
-                graph = pickle.load(file)
-                graphs.append(graph)
-
-        print("done")
-        return {
-            "samples": [
-                {
-                    "x": {"code_rep": sample["code_rep"]},
-                }
-                for sample in graphs
-            ]
+            "num_types": num_types
         }
 
     def preprocess(self, builder, visitor, start_at=False, num_samples=None, randomly_select_samples=False):

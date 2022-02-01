@@ -30,9 +30,6 @@ PREPROCESS_FLAG = not ANGHA_FLAG
 dataset = D.OpenCLDevmapDataset()
 if ANGHA_FLAG:
     dataset = AnghabenchDataset()
-    app.run(dataflow_main)
-
-exit()
 
 #TODO einen fixen split 10% test 90% training
 # funktion schreiben die die samples direkt lädt und testen
@@ -88,8 +85,6 @@ for builder, visitor, model in combinations:
 
             break
     else:
-        #TODO return data in a dict with samples key and maybe "info", "x", "y", "num_types" as subkeys?
-        #data = dataset.load_graphs()
 
         clang_driver = ClangDriver(
             ClangDriver.ProgrammingLanguage.C,
@@ -97,21 +92,14 @@ for builder, visitor, model in combinations:
             [],
             [],
         )
-
-
         data = dataset.load_graphs()
-        #TODO diese preprocess verwenden!!!!
-        # data = dataset.preprocess(builder(clang_driver), visitor)
 
-        print("ABC")
         dataset_length = len(data["samples"])
         test_range = round(float(dataset_length) * 0.1)
         train_idx = round(dataset_length - test_range)
         train_samples = data["samples"][0:train_idx]
         test_samples = data["samples"][train_idx:dataset_length]
-        #FIXME Where can the num_type be efficiently computed form?
-        num_types = 43
-        model = model(num_types=num_types)
+        model = model(num_types=data["num_types"])
         train_summary = model.train(
             train_samples,
             test_samples
