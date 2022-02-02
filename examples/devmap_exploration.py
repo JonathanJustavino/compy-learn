@@ -69,7 +69,6 @@ for builder, visitor, model in combinations:
             [(x, ClangDriver.IncludeDirType.User) for x in dataset.additional_include_dirs],
             ["-xcl", "-target", "x86_64-pc-linux-gnu"],
         )
-        #TODO: nachschauen ob der preprocess jedes mal passiert
         data = dataset.preprocess(builder(clang_driver), visitor, ["amd-app-sdk-3.0"])
         # Train and test
         kf = StratifiedKFold(n_splits=10, shuffle=True, random_state=204)

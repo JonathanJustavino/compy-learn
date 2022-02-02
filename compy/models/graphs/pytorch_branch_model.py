@@ -1,5 +1,6 @@
 import dgl.nn.pytorch
 import torch
+from tqdm import tqdm
 import math
 import torch.nn.functional as F
 import numpy as np
@@ -16,7 +17,7 @@ class Net(torch.nn.Module):
     def __init__(self, config):
         super(Net, self).__init__()
 
-        annotation_size = config["hidden_size_orig"]                             # annotation size: 8
+        annotation_size = config["hidden_size_orig"]
         hidden_size = config["gnn_h_size"]
         n_steps = config["num_timesteps"]
         n_etypes = config["num_edge_types"]
@@ -61,14 +62,14 @@ class GnnPytorchBranchProbabilityModel(Model):
         self.model = Net(config)
         self.model = self.model.to(self.device)
 
-    def __process_data(self, data):
+    def __process_data(self, data, data_part="training"):
         return [
             {
                 "nodes": data["x"]["code_rep"].get_node_list(),
                 "edges": data["x"]["code_rep"].get_edge_list_tuple(),
                 "probability": data["x"]["code_rep"].get_edge_list_with_data(),
             }
-            for data in data
+            for data in tqdm(data, desc=f"Processing {data_part} Data")
         ]
 
     def __build_pg_graphs(self, batch_graphs):
@@ -144,7 +145,7 @@ class GnnPytorchBranchProbabilityModel(Model):
         self.opt = torch.optim.Adam(
             self.model.parameters(), lr=self.config["learning_rate"]
         )
-        return self.__process_data(data_train), self.__process_data(data_valid)
+        return self.__process_data(data_train), self.__process_data(data_valid, data_part="validation")
 
     def _train_with_batch(self, batch):
         batch_size = 999999
@@ -171,16 +172,15 @@ class GnnPytorchBranchProbabilityModel(Model):
 
             batch_loss += loss
             #correct_sum += pred.max(dim=1)[1].eq(truth.view(-1)).sum().item()
-            # pred
             correct_sum += (truth - pred_left).sum().item()
+            #FIXME euklidische Distanz falsch berechnet? sum(((truth - pred)**2).reshape(-1)).sqrt()
             euclidian += sum(((truth - pred)**2).reshape(-1))
 
         train_accuracy = correct_sum / len(loader.dataset)
         train_loss = batch_loss / len(loader.dataset)
         distance /= len(loader.dataset)
         euclidian /= len(loader.dataset)
-        # print("eculidian", f"{euclidian}\t")
-        # print("train")
+
         return train_loss, euclidian
 
     def _predict_with_batch(self, batch):
@@ -208,8 +208,6 @@ class GnnPytorchBranchProbabilityModel(Model):
 
         valid_accuracy = correct / len(loader.dataset)
         valid_loss = batch_loss / len(loader.dataset)
-        # print("valid loss", f"{valid_loss}")
-        # distance /= len(loader.dataset)
 
         return valid_accuracy, valid_loss
 
