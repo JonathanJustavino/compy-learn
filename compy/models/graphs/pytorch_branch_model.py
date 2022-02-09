@@ -1,9 +1,9 @@
 import dgl.nn.pytorch
-import torch
-from tqdm import tqdm
 import math
-import torch.nn.functional as F
+import torch
 import numpy as np
+from tqdm import tqdm
+import torch.nn.functional as F
 
 from torch import nn
 from torch_geometric.nn import GatedGraphConv
@@ -33,6 +33,7 @@ class Net(torch.nn.Module):
         x, edge_index, batch, index = graph.x, graph.edge_index, graph.batch, graph.source_nodes
         indices = [node_idx for sublist in index for node_idx in sublist]
         idx = torch.LongTensor(indices)
+        idx = idx.to(batch.device)
 
         x = self.reduce(x)
         x = self.gconv(x, edge_index)
