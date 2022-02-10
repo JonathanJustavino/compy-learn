@@ -1,5 +1,6 @@
 import dgl.nn.pytorch
-import math
+import os
+import datetime
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -54,7 +55,7 @@ class GnnPytorchBranchProbabilityModel(Model):
                 "gnn_h_size": 64,
                 "learning_rate": 0.001,
                 "batch_size": 64,
-                "num_epochs": 1000,
+                "num_epochs": 100,
                 "num_edge_types": 1,
             }
         super().__init__(config)
@@ -62,6 +63,10 @@ class GnnPytorchBranchProbabilityModel(Model):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = Net(config)
         self.model = self.model.to(self.device)
+        self.log_file = datetime.datetime.now().strftime("%d-%m-%Y--%H:%M:%S")
+        self.training_logs = f"{os.path.expanduser('~')}/training-logs/"
+        if not os.path.exists(self.training_logs):
+            os.mkdir(self.training_logs)
 
     def __process_data(self, data, data_part="training"):
         return [
@@ -148,7 +153,7 @@ class GnnPytorchBranchProbabilityModel(Model):
         )
         return self.__process_data(data_train), self.__process_data(data_valid, data_part="validation")
 
-    def _train_with_batch(self, batch):
+    def _train_with_batch(self, batch, epoch=None):
         batch_size = 999999
         graph = self.__build_pg_graphs(batch)
         loader = DataLoader(graph, batch_size=batch_size)
@@ -182,9 +187,18 @@ class GnnPytorchBranchProbabilityModel(Model):
         distance /= len(loader.dataset)
         euclidian /= len(loader.dataset)
 
+        log = {
+            "type": "train",
+            "epoch": epoch,
+            "train_loss": train_loss,
+            "train_accuracy": train_accuracy,
+            "euclidean_distance": euclidian
+        }
+        self.write_to_log(log)
+
         return train_loss, euclidian
 
-    def _predict_with_batch(self, batch):
+    def _predict_with_batch(self, batch, epoch=None):
         correct = 0
         graphs = self.__build_pg_graphs(batch)
         loader = DataLoader(graphs, batch_size=999999)
@@ -194,7 +208,6 @@ class GnnPytorchBranchProbabilityModel(Model):
 
             with torch.no_grad():
                 pred = self.model(data)
-                #FIXME maybe this part slows it down
                 size = pred.shape[0]
                 if size <= 1:
                     continue
@@ -210,8 +223,24 @@ class GnnPytorchBranchProbabilityModel(Model):
         valid_accuracy = correct / len(loader.dataset)
         valid_loss = batch_loss / len(loader.dataset)
 
+        log = {
+            "type": "valid",
+            "epoch": epoch,
+            "loss": valid_loss,
+            "accuracy": valid_accuracy,
+        }
+        self.write_to_log(log)
+
         return valid_accuracy, valid_loss
 
+    def write_to_log(self, log):
+        with open(f"{self.training_logs}/{self.log_file}-{log['type']}.txt", 'a') as file:
+            output = ""
+            for key, val in log.items():
+                if val is None:
+                    continue
+                output += f"{key}: {val}"
+            file.write(output)
 
 def get_edge_types(graph):
     types = []
