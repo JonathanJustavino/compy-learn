@@ -236,6 +236,7 @@ class GnnPytorchBranchProbabilityModel(Model):
     def write_to_log(self, log):
         with open(f"{self.training_logs}/{self.log_file}-{log['type']}.txt", 'a') as file:
             output = ""
+            del log['type']
             for key, val in log.items():
                 if val is None:
                     continue
