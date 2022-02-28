@@ -171,7 +171,7 @@ class GnnPytorchBranchProbabilityModel(Model):
             pred = self.model(data)
             pred_left = pred[:, 0]
             truth = data.y[:, 0]
-            loss = F.mse_loss(pred_left, truth)
+            loss = F.nll_loss(pred_left, truth)
 
             loss.backward()
             self.opt.step()
@@ -213,7 +213,7 @@ class GnnPytorchBranchProbabilityModel(Model):
                     continue
                 pred_left = pred[:, 0]
                 truth = data.y[:, 0]
-                loss = F.mse_loss(pred_left, truth)
+                loss = F.nll_loss(pred_left, truth)
                 batch_loss += loss
                 truth = data.y[:, 0] if data.y.nelement() > 0 else data.y
 
