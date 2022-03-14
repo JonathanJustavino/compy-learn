@@ -159,7 +159,7 @@ class AnghabenchGraphDataset(Dataset):
                 num_types = collection["num_types"]
                 if num_types > max_num_types:
                     max_num_types = num_types
-        self.__write_file(self.max_num_types_file_path)
+        self.__write_file(self.max_num_types_file_path, {"num_types": max_num_types})
         return max_num_types
 
     def __rename_pickle_files(self):
