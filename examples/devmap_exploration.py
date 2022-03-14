@@ -1,16 +1,19 @@
 import sys
 
 import numpy as np
+import torch.utils.data
 from absl import flags
 from absl import app
 
 from sklearn.model_selection import StratifiedKFold
+from torch_geometric.data import DataLoader
 
 from compy import datasets as D
 from compy import models as M
 from compy import representations as R
 from compy.representations.extractors import ClangDriver
 from compy.datasets.anghabench import AnghabenchDataset
+from compy.datasets.anghabench_graph import AnghabenchGraphDataset
 from compy.datasets import dataflow_preprocess
 from compy.datasets.dataflow_preprocess import main as dataflow_main
 
@@ -29,10 +32,7 @@ PREPROCESS_FLAG = not ANGHA_FLAG
 
 dataset = D.OpenCLDevmapDataset()
 if ANGHA_FLAG:
-    dataset = AnghabenchDataset()
-
-#TODO einen fixen split 10% test 90% training
-# funktion schreiben die die samples direkt lädt und testen
+    dataset = AnghabenchGraphDataset()
 
 # Explore combinations
 combinations = [
@@ -91,16 +91,29 @@ for builder, visitor, model in combinations:
             [],
             [],
         )
-        data = dataset.load_graphs()
 
-        dataset_length = len(data["samples"])
-        test_range = round(float(dataset_length) * 0.1)
-        train_idx = round(dataset_length - test_range)
-        train_samples = data["samples"][0:train_idx]
-        test_samples = data["samples"][train_idx:dataset_length]
-        model = model(num_types=data["num_types"])
+        kf = StratifiedKFold(n_splits=10, shuffle=True, random_state=204)
+
+        amount_samples = dataset.total_num_samples
+        amount_samples = amount_samples // 1000
+        test_range = round(float(amount_samples) * 0.1)
+        train_range = round(amount_samples - test_range)
+        # train_samples = dataset.graph_indexes[0:train_range]
+        # test_samples = dataset.graph_indexes[train_range:amount_samples]
+
+        train_samples = [index for index in range(0, train_range)]
+        test_samples = [index for index in range(train_range, amount_samples)]
+
+        # train 893213
+        # test 99246
+
+        #train_set, test_set = torch.utils.data.random_split(dataset, [train_range, test_range])
+        train_set = torch.utils.data.Subset(dataset, train_samples)
+        test_set = torch.utils.data.Subset(dataset, test_samples)
+
+        model = model(num_types=dataset.num_types)
         train_summary = model.train(
-            train_samples,
-            test_samples
+            train_set,
+            test_set
         )
         print(train_summary)
