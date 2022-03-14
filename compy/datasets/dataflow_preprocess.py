@@ -11,10 +11,10 @@ import tqdm
 from absl import app
 from absl import flags
 
-from compy import datasets
 from compy.datasets import anghabench
 import compy.representations as R
 from compy.representations.extractors import ClangDriver
+from compy.datasets.utils.pickle_filename import get_pickle_filename
 # from compy.representations.dataflow import DFGraphBuilder
 # from compy.representations.dataflow.dominators import compute_dominators
 # from compy.representations.dataflow.liveness import compute_liveness
@@ -124,8 +124,10 @@ class ExtractGraphsTask(MultiProcessedTask):
             self.__enable_file_logging(task_idx)
         data = self.__extract_graphs(tasks[0], tasks[-1] - tasks[0])
         samples = self.__compute_samples(data)
+        sample_count = len(samples['samples'])
+        filename = get_pickle_filename(task_idx, sample_count)
 
-        store(samples, os.path.join(self.out_dir, "%d.pickle" % task_idx))
+        store(samples, os.path.join(self.out_dir, filename))
 
     def __enable_file_logging(self, idx):
         log_dir = os.path.join(FLAGS.out_dir, "logs")
@@ -161,9 +163,6 @@ class ExtractGraphsTask(MultiProcessedTask):
 
             code_rep.relabel_nodes_to_ints()
 
-            #FIXME debug wether d['info'] holds more information than name
-            # in order to be able to shape the angha dataset like the opencldevmap
-            # todo repo doppeln für paralleles debugging
             samples.append({
                 "x": {"code_rep": code_rep},
                 "info": name})
