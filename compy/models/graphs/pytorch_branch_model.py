@@ -61,7 +61,7 @@ class GnnPytorchBranchProbabilityModel(Model):
                 "gnn_h_size": 32,
                 "learning_rate": 0.001,
                 "batch_size": 64,
-                "num_epochs": 3,
+                "num_epochs": 10,
                 "num_edge_types": 1,
             }
         super().__init__(config)
@@ -164,7 +164,7 @@ class GnnPytorchBranchProbabilityModel(Model):
     def _test_init(self):
         self.model.eval()
 
-    def _train_with_batch(self, batch, epoch=None):
+    def _train_with_batch(self, batch):
         batch_loss = 0
         correct_sum = 0
         euclidean_distance = 0
@@ -200,7 +200,7 @@ class GnnPytorchBranchProbabilityModel(Model):
 
         return train_loss, train_accuracy, euclidean_distance, loss_fn.__name__
 
-    def _predict_with_batch(self, batch, epoch=None):
+    def _predict_with_batch(self, batch):
         correct = 0
         euclidean = 0
         batch_loss = 0
@@ -269,7 +269,7 @@ class GnnPytorchBranchProbabilityModel(Model):
             # Train
             start_time = time.time()
             for index, batch in enumerate(train_loader):
-                train_batch_loss, train_batch_accuracy, euclidean_distance, loss_fn = self._train_with_batch(batch, epoch=epoch)
+                train_batch_loss, train_batch_accuracy, euclidean_distance, loss_fn = self._train_with_batch(batch)
                 train_loss += train_batch_loss
                 train_accuracy += train_batch_accuracy
 
@@ -281,7 +281,7 @@ class GnnPytorchBranchProbabilityModel(Model):
 
             valid_count = 0
             for index, batch in enumerate(test_loader):
-                batch_accuracy, batch_loss, valid_euclidean = self._predict_with_batch(batch, epoch=epoch)
+                batch_accuracy, batch_loss, valid_euclidean = self._predict_with_batch(batch)
                 valid_loss += batch_loss
                 valid_count += batch_accuracy * len(batch)
                 print(f"Validation Iteration {index + 1}/{total_test_iterations} batch accuracy: {batch_accuracy}, batch loss: {batch_loss}", end='\r')
