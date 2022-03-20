@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  compy-learn:
+    hostname: compy-learn
+    build:
+      context: .
+    working_dir: /usr/share/compy-learn
+    volumes:
+      - ./.docker-support:/usr/share/compy-learn/.docker-support
+      - ./compy:/usr/share/compy-learn/compy
+      - ./docs:/usr/share/compy-learn/docs
+      - ./examples:/usr/share/compy-learn/examples
+      - ./tests:/usr/share/compy-learn/tests
+      - ./.clang-format:/usr/share/compy-learn/.clang-format
+      - ./.gitignore:/usr/share/compy-learn/.gitignore
+      - ./CMakeLists.txt:/usr/share/compy-learn/CMakeLists.txt
+      - ./install_deps.sh:/usr/share/compy-learn/install_deps.sh
+      - ./LICENSE:/usr/share/compy-learn/LICENSE
+      - ./README.md:/usr/share/compy-learn/README.md
+      - ./setup.py:/usr/share/compy-learn/setup.py
