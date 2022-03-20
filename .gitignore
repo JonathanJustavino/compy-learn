@@ -21,6 +21,7 @@ dist
 
 # Pytest runtime artifacts
 .coverage
+.pytest_cache
 coverage.xml
 htmlcov
 
