@@ -1,0 +1,20 @@
+# disable all (to create a white list)
+*
+
+# white list
+!.docker-support
+!compy
+!docs
+!examples
+!tests
+!.clang-format
+!.gitignore
+!CMakeLists.txt
+!install_deps.sh
+!LICENSE
+!README.md
+!setup.py
+
+# white listing of specific sub folders
+tests/bin
+compy/**/*.so
