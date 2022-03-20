@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 function add_llvm_10_apt_source {
   curl https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
@@ -11,13 +11,23 @@ function add_llvm_10_apt_source {
 }
 
 function install_system_packages {
-  sudo apt install -y graphviz libgraphviz-dev
-  sudo apt install -y libllvm10 llvm-10-dev
-  sudo apt install -y clang-10 libclang1-10 libclang-10-dev libclang-common-10-dev
+  sudo apt-get update -y
+  sudo apt-get upgrade -y
+  sudo apt-get install -y apt-utils build-essential cmake git
+  sudo apt-get install -y python3 python-is-python3 python3-dev python3-venv
+  sudo apt-get install -y graphviz libgraphviz-dev
+  sudo apt-get install -y libllvm10 llvm-10-dev
+  sudo apt-get install -y clang-10 libclang1-10 libclang-10-dev libclang-common-10-dev
 }
 
 function install_python_packages {
   CUDA=$1
+
+  python3 -m pip install wheel
+
+  python3 setup.py bdist_wheel
+
+  python3 -m pip install appdirs gitpython pandas pygraphviz tensorflow torch-geometric tqdm
 
   python3 -m pip install torch==1.5.0+${CUDA} -f https://download.pytorch.org/whl/torch_stable.html
   python3 -m pip install torchvision==0.6.0
