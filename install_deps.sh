@@ -19,12 +19,14 @@ function install_system_packages {
 function install_python_packages {
   CUDA=$1
 
-  python3 -m pip install torch==1.5.0+${CUDA} -f https://download.pytorch.org/whl/torch_stable.html
-  python3 -m pip install torchvision==0.6.0
-  python3 -m pip install torch-scatter==2.0.5 -f https://pytorch-geometric.com/whl/torch-1.5.0+${CUDA}.html
-  python3 -m pip install torch-sparse==0.6.7 -f https://pytorch-geometric.com/whl/torch-1.5.0+${CUDA}.html
-  python3 -m pip install torch-cluster==1.5.7 -f https://pytorch-geometric.com/whl/torch-1.5.0+${CUDA}.html
-  python3 -m pip install torch-spline-conv==1.2.0 -f https://pytorch-geometric.com/whl/torch-1.5.0+${CUDA}.html
+  python3 -m pip install wheel
+
+  python3 setup.py bdist_wheel
+
+  python3 -m pip install appdirs gitpython pandas pygraphviz tensorflow torch-geometric tqdm networkx
+
+  python3 -m pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/${CUDA}
+  python3 -m pip install torch-scatter torch-sparse torch-cluster torch-spline-conv torch-geometric -f https://data.pyg.org/whl/torch-1.11.0+${CUDA}.html
   if [[ "$CUDA" != "cpu" ]]; then
     python3 -m pip install dgl-$CUDA
   else
@@ -36,7 +38,7 @@ function install_python_packages {
 
 if [ $# -eq 0 ]
   then
-    echo "Usage: install_deps {cpu|cu92|cu100|cu101}"
+    echo "Usage: install_deps {cpu|cu92|cu100|cu101|cu113}"
     exit 1
 fi
 
@@ -52,5 +54,5 @@ else
   exit 1
 fi
 
-install_system_packages
+#install_system_packages
 install_python_packages $1
