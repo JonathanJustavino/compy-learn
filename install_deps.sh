@@ -23,12 +23,13 @@ function install_python_packages {
 
   python3 setup.py bdist_wheel
 
-  python3 -m pip install appdirs gitpython pandas pygraphviz tensorflow torch-geometric tqdm networkx
+  python3 -m pip install appdirs gitpython pandas pygraphviz tensorflow tqdm networkx
 
   python3 -m pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/${CUDA}
   python3 -m pip install torch-scatter torch-sparse torch-cluster torch-spline-conv torch-geometric -f https://data.pyg.org/whl/torch-1.11.0+${CUDA}.html
+
   if [[ "$CUDA" != "cpu" ]]; then
-    python3 -m pip install dgl-$CUDA
+    python3 -m pip install dgl-$CUDA -f https://data.dgl.ai/wheels/repo.html\?
   else
     python3 -m pip install dgl
   fi
