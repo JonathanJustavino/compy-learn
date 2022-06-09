@@ -1,18 +1,15 @@
 import sys
-
 import numpy as np
 import torch.utils.data
 from absl import flags
 from absl import app
 
 from sklearn.model_selection import StratifiedKFold
-from torch_geometric.data import DataLoader
 
 from compy import datasets as D
 from compy import models as M
 from compy import representations as R
 from compy.representations.extractors import ClangDriver
-from compy.datasets.anghabench import AnghabenchDataset
 from compy.datasets.anghabench_graph import AnghabenchGraphDataset
 from compy.datasets import dataflow_preprocess
 from compy.datasets.dataflow_preprocess import main as dataflow_main
