@@ -1,7 +1,7 @@
 
 class IndexCache(object):
 
-    def __init__(self, fn_load_item, max_cache_size=50000):
+    def __init__(self, fn_load_item, max_cache_size=1000):
         self.fn_load_item = fn_load_item
         self.max_cache_size = max_cache_size
         self.index_list = []
@@ -22,5 +22,5 @@ class IndexCache(object):
     def ensure_cache_size(self):
         while len(self.index_list) > self.max_cache_size:
             oldest_index = self.index_list.pop(0)
-            print("Deleted", oldest_index)
+            print("Deleted", oldest_index, end="\r")
             del self.item_by_index[oldest_index]
