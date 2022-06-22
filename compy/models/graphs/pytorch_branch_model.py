@@ -207,7 +207,7 @@ class GnnPytorchBranchProbabilityModel(Model):
             train_accuracies = self._calculate_accuracy_with_threshold(errors, len(truth))
 
             # removed sqrt for performance reasons
-            # euclidean_distance += sum(((truth - pred)**2).view(-1)).item()
+            euclidean_distance += sum(((truth - pred)**2).view(-1)).item()
 
         # To free up memory => Has not that much of an impact
         # TODO: do some test runs later on
