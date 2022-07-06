@@ -368,6 +368,18 @@ class GnnPytorchBranchProbabilityModel(Model):
         return train_summary
 
 
+def r2_loss(prediction, ground_truth):
+    r2_loss.__name__ = "r2_score"
+    # Sources:
+    # https://pytorch.org/ignite/generated/ignite.contrib.metrics.regression.R2Score.html
+    # https://en.wikipedia.org/wiki/Coefficient_of_determination
+
+    ground_truth_mean = torch.mean(ground_truth)
+    squares_sum_total = torch.sum(torch.pow((ground_truth - ground_truth_mean), 2))
+    squares_sum_residual = torch.sum(torch.pow((ground_truth - prediction), 2))
+    return 1 - squares_sum_residual / squares_sum_total
+
+
 def get_edge_types(graph):
     types = []
     for edge in graph["probability"]:
