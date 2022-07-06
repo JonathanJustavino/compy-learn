@@ -62,10 +62,12 @@ class GnnPytorchBranchProbabilityModel(Model):
             }
         super().__init__(config)
 
+        date = datetime.datetime.now().strftime("%d-%m-%Y--%H:%M:%S")
+
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = Net(config)
         self.model = self.model.to(self.device)
-        self.log_file = datetime.datetime.now().strftime("%d-%m-%Y--%H:%M:%S")
+        self.log_file = f"{date}-batch_size_{config['batch_size']}-hidden_size_{config['gnn_h_size']}_lr_{config['learning_rate']}"
         self.training_logs = f"{os.path.expanduser('~')}/training-logs/"
         in_place_flag = True
         self.thresholds = (nn.Threshold(0.2, 0, inplace=in_place_flag), nn.Threshold(0.1, 0, inplace=in_place_flag), nn.Threshold(0.05, 0, inplace=in_place_flag))
@@ -210,14 +212,6 @@ class GnnPytorchBranchProbabilityModel(Model):
             exponent = 2
             euclidean_distance += torch.sqrt(torch.sum(torch.pow((truth - pred), exponent).view(-1))).item()
 
-        # To free up memory => Has not that much of an impact
-        # TODO: do some test runs later on
-        # del data
-        # del errors
-        # del loss
-        # del pred
-        # del pred_left
-        # del truth
 
         length_dataset = len(loader.dataset)
 
@@ -266,13 +260,13 @@ class GnnPytorchBranchProbabilityModel(Model):
         file_path = f"{self.training_logs}/{self.log_file}-{log['type']}.csv"
 
         if not os.path.isfile(file_path):
-            self.create_log(file_path, log)
+            self._create_log(file_path, log)
 
         with open(file_path, 'a', newline='', encoding=encoding) as file:
             writer = csv.writer(file)
             writer.writerow(log["data"])
 
-    def create_log(self, file_name, log, encoding="UTF-8"):
+    def _create_log(self, file_name, log, encoding="UTF-8"):
         with open(file_name, 'a', newline='', encoding=encoding) as file:
             writer = csv.writer(file)
             writer.writerow(log["header"])
@@ -354,7 +348,7 @@ class GnnPytorchBranchProbabilityModel(Model):
 
             validation_log = {
                 "type": "valid",
-                "header": ["epoch", f"valid_loss_{loss_fn.__name__}", "small_threshold_valid_accuracy", "edium_threshold_valid_accuracy", "large_threshold_valid_accuracy", "euclidean_distance"],
+                "header": ["epoch", f"valid_loss_{loss_fn.__name__}", "small_threshold_valid_accuracy", "medium_threshold_valid_accuracy", "large_threshold_valid_accuracy", "euclidean_distance"],
                 "data": [epoch, valid_loss, valid_accuracy[0], valid_accuracy[1], valid_accuracy[2], valid_euclidean]
             }
 
