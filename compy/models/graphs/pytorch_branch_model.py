@@ -57,7 +57,7 @@ class GnnPytorchBranchProbabilityModel(Model):
                 "gnn_h_size": 64,
                 "learning_rate": 0.001,
                 "batch_size": 64, # Maybe increase this size
-                "num_epochs": 100,
+                "num_epochs": 40,
                 "num_edge_types": 1,
             }
         super().__init__(config)
@@ -165,6 +165,50 @@ class GnnPytorchBranchProbabilityModel(Model):
             ((total_values - torch.count_nonzero(large_threshold(errors))).item() / total_values)
         ]
 
+    def stuff(self, truth, prediction):
+        small, medium, large = self.get_thresholds()
+        binary = nn.Threshold(0.49, 0)
+
+        small_truth = small(truth)
+        medium_truth = medium(truth)
+        large_truth = large(truth)
+        binary_truth = binary(truth)
+
+        small_prediction = small(prediction)
+        medium_prediction = medium(prediction)
+        large_prediction = large(prediction)
+        binary_prediction = binary(prediction)
+
+        small_branch_labels = self._collect_branch_labels(small_truth, small_prediction)
+        medium_branch_labels = self._collect_branch_labels(medium_truth, medium_prediction)
+        large_branch_labels = self._collect_branch_labels(large_truth, large_prediction)
+        binary_branch_labels = self._collect_branch_labels(binary_truth, binary_prediction)
+
+    def _collect_branch_labels(self, truth_left, prediction_left, threshold=nn.Threshold(0.49, 0)):
+        # 1. round everything > 0.49 to 1
+        # 2. torch.where > 0. => true positives
+        # 3. torch.where < 1. => false positives
+        # 4. index_select true positive indexes in prediction
+        # 5. index_select false positive indexes in prediction
+        with torch.no_grad():
+            truth_left = torch.round(threshold(truth_left))
+            prediction_left = torch.round(threshold(prediction_left))
+
+            true_positives = torch.where(truth_left > 0.)[0]
+            false_positives = torch.where(truth_left < 1.)[0]
+            tp_indexes = torch.index_select(prediction_left, 0, true_positives)
+            fp_indexes = torch.index_select(prediction_left, 0, false_positives)
+            tp_prediction = torch.where(tp_indexes > 0.)[0]
+            fn_prediction = torch.where(tp_indexes < 1.)[0]
+            fp_prediction = torch.where(fp_indexes > 0.)[0]
+
+            tp = len(tp_prediction)
+            fp = len(fp_prediction)
+            fn = len(fn_prediction)
+            tn = len(truth_left) - (tp + fp + fn)
+
+            return tp, tn, fp, fn
+
     def _train_init(self, data_train=None, data_valid=None):
         self.opt = torch.optim.Adam(
             self.model.parameters(), lr=self.config["learning_rate"]
@@ -194,7 +238,7 @@ class GnnPytorchBranchProbabilityModel(Model):
 
             pred = self.model(data)
             size = pred.shape[0]
-            #FIXME checkout where the error might be coming from
+            # FIXME checkout where the error might be coming from
             if size <= 1:
                 continue
             pred_left = pred[:, 0]
@@ -207,18 +251,17 @@ class GnnPytorchBranchProbabilityModel(Model):
             sample_loss += loss.item()
             errors = torch.abs(truth - pred_left)
             train_accuracies = self._calculate_accuracy_with_threshold(errors, len(truth))
-
+            tp, tn, fp, fn = self._collect_branch_labels(truth, pred_left)
             # removed sqrt for performance reasons
             exponent = 2
             euclidean_distance += torch.sqrt(torch.sum(torch.pow((truth - pred), exponent).view(-1))).item()
-
 
         length_dataset = len(loader.dataset)
 
         train_loss = sample_loss / length_dataset
         euclidean_distance /= length_dataset
 
-        return train_loss, train_accuracies, euclidean_distance
+        return train_loss, train_accuracies, euclidean_distance, (tp, tn, fp, fn)
 
     def _predict_with_batch(self, batch, loss_fn):
         sample_loss = 0
@@ -245,16 +288,16 @@ class GnnPytorchBranchProbabilityModel(Model):
                 truth = data.y[:, 0] if data.y.nelement() > 0 else data.y
 
             errors = torch.abs(truth - pred_left)
-            accuracy = self._calculate_accuracy_with_threshold(errors, len(truth))
+            valid_accuracies = self._calculate_accuracy_with_threshold(errors, len(truth))
+            tp, tn, fp, fn = self._collect_branch_labels(truth, pred_left)
             exponent = 2
             euclidean_distance += torch.sqrt(torch.sum(torch.pow((truth - pred), exponent).view(-1))).item()
 
         length_dataset = len(loader.dataset)
-        valid_accuracy = accuracy
         sample_loss = sample_loss / length_dataset
         valid_euclidean = euclidean_distance / length_dataset
 
-        return valid_accuracy, sample_loss, valid_euclidean
+        return valid_accuracies, sample_loss, valid_euclidean, (tp, tn, fp, fn)
 
     def write_to_log(self, log, encoding='UTF-8'):
         file_path = f"{self.training_logs}/{self.log_file}-{log['type']}.csv"
@@ -271,6 +314,47 @@ class GnnPytorchBranchProbabilityModel(Model):
             writer = csv.writer(file)
             writer.writerow(log["header"])
 
+    def _store_epoch_data(self, epoch, loss_fn, loss, accuracy, euclidean_distance, branch_labels, log_type='train', instances_per_sec=0):
+        header = [
+            "epoch",
+            f"loss_{loss_fn.__name__}",
+            "small_threshold",
+            "medium_threshold",
+            "large_threshold",
+            "euclidean_distance",
+            "tp",
+            "fp",
+            "tn",
+            "fn",
+        ]
+
+        small, medium, large = accuracy
+        true_positive, false_positive, true_negative, false_negative = branch_labels
+
+        data = [
+            epoch,
+            loss,
+            small,
+            medium,
+            large,
+            euclidean_distance,
+            true_positive,
+            false_positive,
+            true_negative,
+            false_negative
+        ]
+
+        if 'train' in log_type:
+            header.append("train instances/sec")
+            data.append(instances_per_sec)
+
+        log = {
+           "type": log_type,
+           "header": header,
+           "data": data
+        }
+        return log
+
     def add_metrics(self, loss, accuracy, euclidean, batch_loss, batch_accuracy, batch_euclidean):
         loss += batch_loss
         euclidean += batch_euclidean
@@ -278,6 +362,13 @@ class GnnPytorchBranchProbabilityModel(Model):
         accuracy[1] += batch_accuracy[1]  # accuracy with medium threshold
         accuracy[2] += batch_accuracy[2]  # accuracy with large threshold
         return loss, accuracy, euclidean
+
+    def add_labels(self, branch_labels, new_labels):
+        branch_labels[0] += new_labels[0]
+        branch_labels[1] += new_labels[1]
+        branch_labels[2] += new_labels[2]
+        branch_labels[3] += new_labels[3]
+        return branch_labels
 
     def train(self, data_train, data_valid):
         train_summary = []
@@ -296,13 +387,15 @@ class GnnPytorchBranchProbabilityModel(Model):
             train_loss = 0
             train_euclidean = 0
             train_accuracy = [0., 0., 0.]
+            train_tp_fp_tn_fn_labels = [0, 0, 0, 0]
 
             print("Epoch", epoch)
             # Train
             start_time = time.time()
             for index, batch in enumerate(train_loader):
-                train_batch_loss, train_batch_accuracy, euclidean_distance = self._train_with_batch(batch, loss_fn)
+                train_batch_loss, train_batch_accuracy, euclidean_distance, batch_labels = self._train_with_batch(batch, loss_fn)
                 train_loss, train_accuracy, train_euclidean = self.add_metrics(train_loss, train_accuracy, train_euclidean, train_batch_loss, train_batch_accuracy, euclidean_distance)
+                train_tp_fp_tn_fn_labels = self.add_labels(train_tp_fp_tn_fn_labels, batch_labels)
 
                 print(f"Training Iteration {index + 1}/{total_train_iterations} batch accuracy: {train_batch_accuracy[1]}, batch loss: {train_batch_loss}, euclidean distance: {euclidean_distance}")
 
@@ -314,10 +407,12 @@ class GnnPytorchBranchProbabilityModel(Model):
             valid_loss = 0
             valid_euclidean = 0
             valid_accuracy = [0., 0., 0.]
+            valid_tp_fp_tn_fn_labels = [0, 0, 0, 0]
 
             for index, batch in enumerate(test_loader):
-                batch_accuracy, batch_loss, euclidean_distance = self._predict_with_batch(batch, loss_fn)
+                batch_accuracy, batch_loss, euclidean_distance, batch_labels = self._predict_with_batch(batch, loss_fn)
                 valid_loss, valid_accuracy, valid_euclidean = self.add_metrics(valid_loss, valid_accuracy, valid_euclidean, batch_loss, batch_accuracy, euclidean_distance)
+                valid_tp_fp_tn_fn_labels = self.add_labels(valid_tp_fp_tn_fn_labels, batch_labels)
                 print(f"Validation Iteration {index + 1}/{total_test_iterations} batch accuracy: {batch_accuracy[1]}, batch loss: {batch_loss}, euclidean distance: {euclidean_distance}")
 
             # Logging
@@ -340,17 +435,8 @@ class GnnPytorchBranchProbabilityModel(Model):
 
             instances_per_sec = len(data_train) / (end_time - start_time)
 
-            training_log = {
-                "type": "train",
-                "header": ["epoch", f"train_loss_{loss_fn.__name__}", "small_threshold_train_accuracy", "medium_threshold_train_accuracy", "large_threshold_train_accuracy", "euclidean_distance", "train instances/sec"],
-                "data": [epoch, train_loss, train_accuracy[0], train_accuracy[1], train_accuracy[2], train_euclidean, instances_per_sec],
-            }
-
-            validation_log = {
-                "type": "valid",
-                "header": ["epoch", f"valid_loss_{loss_fn.__name__}", "small_threshold_valid_accuracy", "medium_threshold_valid_accuracy", "large_threshold_valid_accuracy", "euclidean_distance"],
-                "data": [epoch, valid_loss, valid_accuracy[0], valid_accuracy[1], valid_accuracy[2], valid_euclidean]
-            }
+            training_log = self._store_epoch_data(epoch, loss_fn, train_loss, train_accuracy, train_euclidean, train_tp_fp_tn_fn_labels, log_type='train', instances_per_sec=instances_per_sec)
+            validation_log = self._store_epoch_data(epoch, loss_fn, valid_loss, train_accuracy, valid_euclidean, valid_tp_fp_tn_fn_labels, log_type='valid')
 
             self.write_to_log(training_log)
             self.write_to_log(validation_log)
