@@ -1,13 +1,10 @@
 import os
 import re
-import torch
 import pickle
 import numpy as np
 from tqdm import tqdm
 from compy.datasets import IndexCache
-from torch_geometric.data import Data
 from torch_geometric.data import Dataset
-from torch_geometric import transforms as T
 
 
 class AnghabenchGraphDataset(Dataset):
@@ -22,7 +19,8 @@ class AnghabenchGraphDataset(Dataset):
     """
 
     def __init__(self):
-        self.root = os.environ.get('ANGHA_PICKLE_DIR')
+        self.datafolder_name = "ExtractGraphsTask"
+        self.root = self.get_basepath(os.environ.get('ANGHA_PICKLE_DIR'))
         self._setup_directories()
         self.graph_indexes_file_path = f"{self.dataset_info_path}/graphs_info.pickle"
         self.max_num_types_file_path = f"{self.dataset_info_path}/max_num_types.pickle"
@@ -34,6 +32,11 @@ class AnghabenchGraphDataset(Dataset):
         self.queue_size = 10
         self.index_cache = IndexCache(self.load_file)
         super().__init__(self.root, self.__process_data)
+
+    def get_basepath(self, path):
+        if self.datafolder_name in path:
+            path = os.path.split(path)[0]
+        return path
 
     def len(self):
         return self.total_num_samples
@@ -90,7 +93,7 @@ class AnghabenchGraphDataset(Dataset):
         self.dataset_info_path = path
 
     def __set_content_dir(self):
-        content_dir = os.path.join(self.root, "ExtractGraphsTask")
+        content_dir = os.path.join(self.root, self.datafolder_name)
         if os.path.exists(content_dir):
             self.content_dir = content_dir
             return
