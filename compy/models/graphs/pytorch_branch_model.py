@@ -4,6 +4,7 @@ import time
 import torch
 import datetime
 import numpy as np
+from collections import namedtuple
 from torch.nn import functional as F
 
 from torch import nn
@@ -23,7 +24,7 @@ class Net(torch.nn.Module):
         hidden_size = config["gnn_h_size"]
         n_steps = config["num_timesteps"]
         n_etypes = config["num_edge_types"]
-        branch_count = 1
+        branch_count = 2
 
         self.reduce = nn.Linear(annotation_size, hidden_size)
         self.gconv = GatedGraphConv(hidden_size, n_steps)
@@ -44,6 +45,7 @@ class Net(torch.nn.Module):
         x = torch.index_select(x, dimension, idx)
         x = self.lin(x)
         x = torch.sigmoid(x)
+        # x = torch.softmax(x)
 
         return x
 
@@ -57,20 +59,26 @@ class GnnPytorchBranchProbabilityModel(Model):
                 "gnn_h_size": 64,
                 "learning_rate": 0.001,
                 "batch_size": 64, # Maybe increase this size
-                "num_epochs": 40,
+                "num_epochs": 50,
                 "num_edge_types": 1,
             }
         super().__init__(config)
 
         date = datetime.datetime.now().strftime("%d-%m-%Y--%H:%M:%S")
+        thresholds = namedtuple('thresholds', ['small', 'medium', 'large', 'binary'])
+        in_place_flag = True
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = Net(config)
         self.model = self.model.to(self.device)
         self.log_file = f"{date}-batch_size_{config['batch_size']}-hidden_size_{config['gnn_h_size']}_lr_{config['learning_rate']}"
         self.training_logs = f"{os.path.expanduser('~')}/training-logs/"
-        in_place_flag = True
-        self.thresholds = (nn.Threshold(0.2, 0, inplace=in_place_flag), nn.Threshold(0.1, 0, inplace=in_place_flag), nn.Threshold(0.05, 0, inplace=in_place_flag))
+        self.thresholds = thresholds(
+            nn.Threshold(0.05, 0, inplace=in_place_flag),
+            nn.Threshold(0.1, 0, inplace=in_place_flag),
+            nn.Threshold(0.2, 0, inplace=in_place_flag),
+            nn.Threshold(0.5, 0, inplace=in_place_flag)
+        )
         if not os.path.exists(self.training_logs):
             os.mkdir(self.training_logs)
 
@@ -84,9 +92,6 @@ class GnnPytorchBranchProbabilityModel(Model):
             for data in data
         ]
 
-    def get_thresholds(self):
-        return sorted(self.thresholds, key=lambda item: item.threshold)
-
     def __build_pg_graphs(self, batch_graphs):
         pg_graphs = []
         total_node_count = 0
@@ -94,12 +99,6 @@ class GnnPytorchBranchProbabilityModel(Model):
 
         # Graph
         for graph_index, batch_graph in enumerate(batch_graphs):
-            # Nodes
-            one_hot = np.zeros(
-                (len(batch_graph["nodes"]), self.config["hidden_size_orig"])
-            )
-            one_hot[np.arange(len(batch_graph["nodes"])), batch_graph["nodes"]] = 1
-            x = torch.tensor(one_hot, dtype=torch.float, device=self.device)
 
             # Edges
             edge_index, edge_features, probability_list, source_nodes = [], [], [], []
@@ -127,9 +126,27 @@ class GnnPytorchBranchProbabilityModel(Model):
 
             node_count = len(batch_graphs[graph_index - 1]["nodes"]) if graph_index > 0 else 0
             total_node_count += node_count
-            source_nodes = [source_node + total_node_count for source_node in source_nodes]
 
-            edge_probabilities = self.__get_probability_tensor(probability_list)
+            source_nodes = np.array(source_nodes)
+            drop_idxs, drop_nodes, edge_probabilities = self.get_filtered_probability_tensors(probability_list, source_nodes)
+
+            along_dimension = 0
+            source_nodes = np.delete(source_nodes, drop_idxs, along_dimension)
+
+            #1 determine 100 nodes  done
+            #2 filter them out in source nodes AND one_hot
+            #3 add offset to source nodes
+
+            # Nodes
+            one_hot = np.zeros(
+                (len(batch_graph["nodes"]), self.config["hidden_size_orig"])
+            )
+            one_hot[np.arange(len(batch_graph["nodes"])), batch_graph["nodes"]] = 1
+
+            # one_hot_without_single_branches = np.delete(one_hot, drop_nodes, along_dimension)
+
+            x = torch.tensor(one_hot, dtype=torch.float, device=self.device)
+            source_nodes = [source_node + total_node_count for source_node in source_nodes]
 
             graph = Data(
                 x=x,
@@ -143,68 +160,89 @@ class GnnPytorchBranchProbabilityModel(Model):
 
         return pg_graphs
 
-    def __get_probability_tensor(self, probabilities):
+    def get_filtered_probability_tensors(self, probability_list, source_nodes):
+        drop_indices = []
+        drop_nodes = []
         edge_probabilities = []
-        for index, prob in enumerate(probabilities):
+        for idx, source_node_prob in enumerate(zip(source_nodes, probability_list)):
+            source_node, prob = source_node_prob
             if prob == 100:
-                edge_probabilities.append([prob, 0])
+                drop_indices.append(idx)
+                drop_nodes.append(source_node)
                 continue
-            if prob == 0:
-                edge_probabilities.append([prob, 100])
-                continue
-            edge_probabilities.append([prob[0], prob[1]])
+            edge_probabilities.append(prob)
+        return drop_indices, drop_nodes, torch.tensor(edge_probabilities, dtype=torch.float, device=self.device) / 100
+
+    def __get_probability_tensor(self, probabilities):
+        def remove_single_branches(branch_value):
+            return branch_value != 100
+
+        filtered = filter(remove_single_branches, probabilities)
+        edge_probabilities = list(filtered)
+
+        # edge_probabilities = []
+        # for index, prob in enumerate(probabilities):
+        #     if prob == 100:
+        #         edge_probabilities.append([prob, 0])
+        #         continue
+        #     if prob == 0:
+        #         edge_probabilities.append([prob, 100])
+
+
         return torch.tensor(edge_probabilities, dtype=torch.float, device=self.device) / 100
 
     def _calculate_accuracy_with_threshold(self, errors, total_values):
         # Replace correct values with zero, to count them afterwards
-        small_threshold, medium_threshold, large_threshold = self.get_thresholds()
 
         return [
-            ((total_values - torch.count_nonzero(small_threshold(errors))).item() / total_values),
-            ((total_values - torch.count_nonzero(medium_threshold(errors))).item() / total_values),
-            ((total_values - torch.count_nonzero(large_threshold(errors))).item() / total_values)
+            ((total_values - torch.count_nonzero(self.thresholds.small(errors))).item() / total_values),
+            ((total_values - torch.count_nonzero(self.thresholds.medium(errors))).item() / total_values),
+            ((total_values - torch.count_nonzero(self.thresholds.large(errors))).item() / total_values)
         ]
 
-    def stuff(self, truth, prediction):
-        small, medium, large = self.get_thresholds()
-        binary = nn.Threshold(0.49, 0)
+    # FIXME How can this be calculated
+    def fixme_thresholded_branch_labels(self, truth, prediction):
+        small_truth = self.thresholds.small(truth)
+        medium_truth = self.thresholds.medium(truth)
+        large_truth = self.thresholds.large(truth)
+        binary_truth = self.thresholds.binary(truth)
 
-        small_truth = small(truth)
-        medium_truth = medium(truth)
-        large_truth = large(truth)
-        binary_truth = binary(truth)
-
-        small_prediction = small(prediction)
-        medium_prediction = medium(prediction)
-        large_prediction = large(prediction)
-        binary_prediction = binary(prediction)
+        small_prediction = self.thresholds.small(prediction)
+        medium_prediction = self.thresholds.medium(prediction)
+        large_prediction = self.thresholds.large(prediction)
+        binary_prediction = self.thresholds.binary(prediction)
 
         small_branch_labels = self._collect_branch_labels(small_truth, small_prediction)
         medium_branch_labels = self._collect_branch_labels(medium_truth, medium_prediction)
         large_branch_labels = self._collect_branch_labels(large_truth, large_prediction)
         binary_branch_labels = self._collect_branch_labels(binary_truth, binary_prediction)
 
-    def _collect_branch_labels(self, truth_left, prediction_left, threshold=nn.Threshold(0.49, 0)):
-        # 1. round everything > 0.49 to 1
+    def _collect_branch_labels(self, truth_left, prediction, threshold=0.5):
+        # 1. round everything > 0.5 to 1
         # 2. torch.where > 0. => true positives
         # 3. torch.where < 1. => false positives
         # 4. index_select true positive indexes in prediction
         # 5. index_select false positive indexes in prediction
+        #FIXME figure out non-binary thresholds
         with torch.no_grad():
-            truth_left = torch.round(threshold(truth_left))
-            prediction_left = torch.round(threshold(prediction_left))
+            one = torch.tensor(1.0, dtype=prediction.dtype).cuda()
 
-            true_positives = torch.where(truth_left > 0.)[0]
-            false_positives = torch.where(truth_left < 1.)[0]
-            tp_indexes = torch.index_select(prediction_left, 0, true_positives)
-            fp_indexes = torch.index_select(prediction_left, 0, false_positives)
-            tp_prediction = torch.where(tp_indexes > 0.)[0]
-            fn_prediction = torch.where(tp_indexes < 1.)[0]
-            fp_prediction = torch.where(fp_indexes > 0.)[0]
+            truth_left = torch.where(truth_left < threshold, truth_left, one)
+            prediction = torch.where(prediction < threshold, prediction, one)
 
-            tp = len(tp_prediction)
-            fp = len(fp_prediction)
-            fn = len(fn_prediction)
+            left_branch_indexes = torch.where(truth_left == 1.)[0]
+            right_branch_indexes = torch.where(truth_left != 1.)[0]
+
+            should_predict_left = torch.index_select(prediction, 0, left_branch_indexes)
+            should_predict_right = torch.index_select(prediction, 0, right_branch_indexes)
+
+            true_positives = torch.where(should_predict_left == 1.)[0]
+            false_negatives = torch.where(should_predict_left != 1.)[0]
+            false_positives = torch.where(should_predict_right == 1.)[0]
+
+            tp = len(true_positives)
+            fp = len(false_positives)
+            fn = len(false_negatives)
             tn = len(truth_left) - (tp + fp + fn)
 
             return tp, tn, fp, fn
@@ -223,8 +261,8 @@ class GnnPytorchBranchProbabilityModel(Model):
     def _train_with_batch(self, batch, loss_fn):
         sample_loss = 0
         euclidean_distance = 0
+        tp, tn, fp, fn = 0, 0, 0, 0
         train_accuracies = [0., 0., 0.]
-        loss_fn = loss_fn
         batch_size = self.config["batch_size"]
 
         graph = self.__build_pg_graphs(batch)
@@ -244,17 +282,18 @@ class GnnPytorchBranchProbabilityModel(Model):
             pred_left = pred[:, 0]
             truth = data.y[:, 0]
             loss = loss_fn(pred_left, truth)
+            # r2 = r2_score(pred_left, truth)
 
             loss.backward()
             self.opt.step()
 
             sample_loss += loss.item()
             errors = torch.abs(truth - pred_left)
-            train_accuracies = self._calculate_accuracy_with_threshold(errors, len(truth))
+            sample_count = len(truth)
+            train_accuracies = self._calculate_accuracy_with_threshold(errors, sample_count)
             tp, tn, fp, fn = self._collect_branch_labels(truth, pred_left)
-            # removed sqrt for performance reasons
             exponent = 2
-            euclidean_distance += torch.sqrt(torch.sum(torch.pow((truth - pred), exponent).view(-1))).item()
+            euclidean_distance += torch.sqrt(torch.sum(torch.pow((truth - pred_left), exponent).view(-1))).item()
 
         length_dataset = len(loader.dataset)
 
@@ -266,7 +305,8 @@ class GnnPytorchBranchProbabilityModel(Model):
     def _predict_with_batch(self, batch, loss_fn):
         sample_loss = 0
         euclidean_distance = 0
-        loss_fn = loss_fn
+        tp, tn, fp, fn = 0, 0, 0, 0
+        valid_accuracies = [0., 0., 0.]
         batch_size = self.config["batch_size"]
 
         graphs = self.__build_pg_graphs(batch)
@@ -291,7 +331,7 @@ class GnnPytorchBranchProbabilityModel(Model):
             valid_accuracies = self._calculate_accuracy_with_threshold(errors, len(truth))
             tp, tn, fp, fn = self._collect_branch_labels(truth, pred_left)
             exponent = 2
-            euclidean_distance += torch.sqrt(torch.sum(torch.pow((truth - pred), exponent).view(-1))).item()
+            euclidean_distance += torch.sqrt(torch.sum(torch.pow((truth - pred_left), exponent).view(-1))).item()
 
         length_dataset = len(loader.dataset)
         sample_loss = sample_loss / length_dataset
@@ -454,8 +494,7 @@ class GnnPytorchBranchProbabilityModel(Model):
         return train_summary
 
 
-def r2_loss(prediction, ground_truth):
-    r2_loss.__name__ = "r2_score"
+def r2_score(prediction, ground_truth):
     # Sources:
     # https://pytorch.org/ignite/generated/ignite.contrib.metrics.regression.R2Score.html
     # https://en.wikipedia.org/wiki/Coefficient_of_determination
@@ -463,7 +502,7 @@ def r2_loss(prediction, ground_truth):
     ground_truth_mean = torch.mean(ground_truth)
     squares_sum_total = torch.sum(torch.pow((ground_truth - ground_truth_mean), 2))
     squares_sum_residual = torch.sum(torch.pow((ground_truth - prediction), 2))
-    return 1 - squares_sum_residual / squares_sum_total
+    return torch.sub(1, torch.div(squares_sum_residual, squares_sum_total))
 
 
 def get_edge_types(graph):
