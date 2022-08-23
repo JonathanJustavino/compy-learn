@@ -22,12 +22,12 @@ class Net(torch.nn.Module):
 
         annotation_size = config["hidden_size_orig"]
         hidden_size = config["gnn_h_size"]
-        n_steps = config["num_timesteps"]
+        num_layers = config["num_layers"]
         n_etypes = config["num_edge_types"]
         branch_count = 2
 
         self.reduce = nn.Linear(annotation_size, hidden_size)
-        self.gconv = GatedGraphConv(hidden_size, n_steps)
+        self.gg_conv_1 = GatedGraphConv(hidden_size, num_layers)
         self.lin = nn.Linear(hidden_size, branch_count)
 
     def forward(
@@ -40,12 +40,11 @@ class Net(torch.nn.Module):
         idx = idx.to(batch.device)
 
         x = self.reduce(x)
-        x = self.gconv(x, edge_index)
+        x = self.gg_conv_1(x, edge_index)
 
         x = torch.index_select(x, dimension, idx)
         x = self.lin(x)
         x = torch.sigmoid(x)
-        # x = torch.softmax(x)
 
         return x
 
@@ -54,12 +53,12 @@ class GnnPytorchBranchProbabilityModel(Model):
     def __init__(self, config=None, num_types=None):
         if not config:
             config = {
-                "num_timesteps": 3,
+                "num_layers": 40,
                 "hidden_size_orig": num_types,
                 "gnn_h_size": 64,
                 "learning_rate": 0.001,
-                "batch_size": 64, # Maybe increase this size
-                "num_epochs": 50,
+                "batch_size": 32, # Maybe increase this size
+                "num_epochs": 20,
                 "num_edge_types": 1,
             }
         super().__init__(config)
@@ -71,7 +70,7 @@ class GnnPytorchBranchProbabilityModel(Model):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = Net(config)
         self.model = self.model.to(self.device)
-        self.log_file = f"{date}-batch_size_{config['batch_size']}-hidden_size_{config['gnn_h_size']}_lr_{config['learning_rate']}"
+        self.log_file = f"{date}-layers-{config['num_layers']}-batch_size_{config['batch_size']}-hidden_size_{config['gnn_h_size']}_lr_{config['learning_rate']}"
         self.training_logs = f"{os.path.expanduser('~')}/training-logs/"
         self.thresholds = thresholds(
             nn.Threshold(0.05, 0, inplace=in_place_flag),
@@ -99,6 +98,11 @@ class GnnPytorchBranchProbabilityModel(Model):
 
         # Graph
         for graph_index, batch_graph in enumerate(batch_graphs):
+            # Nodes
+            one_hot = np.zeros(
+                (len(batch_graph["nodes"]), self.config["hidden_size_orig"])
+            )
+            one_hot[np.arange(len(batch_graph["nodes"])), batch_graph["nodes"]] = 1
 
             # Edges
             edge_index, edge_features, probability_list, source_nodes = [], [], [], []
@@ -122,6 +126,7 @@ class GnnPytorchBranchProbabilityModel(Model):
 
             # Probability Nodes
             edge_index = torch.tensor(edge_index, dtype=torch.long, device=self.device)
+            # TODO: Inspect edge_features tensor to get a better understanding of the data
             edge_features = torch.tensor(edge_features, dtype=torch.long, device=self.device)
 
             node_count = len(batch_graphs[graph_index - 1]["nodes"]) if graph_index > 0 else 0
@@ -136,14 +141,6 @@ class GnnPytorchBranchProbabilityModel(Model):
             #1 determine 100 nodes  done
             #2 filter them out in source nodes AND one_hot
             #3 add offset to source nodes
-
-            # Nodes
-            one_hot = np.zeros(
-                (len(batch_graph["nodes"]), self.config["hidden_size_orig"])
-            )
-            one_hot[np.arange(len(batch_graph["nodes"])), batch_graph["nodes"]] = 1
-
-            # one_hot_without_single_branches = np.delete(one_hot, drop_nodes, along_dimension)
 
             x = torch.tensor(one_hot, dtype=torch.float, device=self.device)
             source_nodes = [source_node + total_node_count for source_node in source_nodes]
@@ -251,9 +248,9 @@ class GnnPytorchBranchProbabilityModel(Model):
         self.opt = torch.optim.Adam(
             self.model.parameters(), lr=self.config["learning_rate"]
         )
-        if not data_train or data_valid:
-            return
-        return self.__process_data(data_train), self.__process_data(data_valid)
+        # if not data_train or data_valid:
+        #     return
+        # return self.__process_data(data_train), self.__process_data(data_valid)
 
     def _test_init(self):
         self.model.eval()
@@ -271,7 +268,7 @@ class GnnPytorchBranchProbabilityModel(Model):
         for data in loader:
             # data = data.to(self.device)
 
-            self.model.train()
+            self.model.train() #TODO: check if this is really necessary for every batch => move this line to init
             self.opt.zero_grad()
 
             pred = self.model(data)
@@ -282,7 +279,6 @@ class GnnPytorchBranchProbabilityModel(Model):
             pred_left = pred[:, 0]
             truth = data.y[:, 0]
             loss = loss_fn(pred_left, truth)
-            # r2 = r2_score(pred_left, truth)
 
             loss.backward()
             self.opt.step()
@@ -314,6 +310,7 @@ class GnnPytorchBranchProbabilityModel(Model):
         for data in loader:
             data = data.to(self.device)
 
+            #TODO: check whether torch.no_grad is the same as model.eval()
             with torch.no_grad():
                 pred = self.model(data)
                 size = pred.shape[0]
@@ -417,11 +414,12 @@ class GnnPytorchBranchProbabilityModel(Model):
         loss_fn = F.mse_loss
 
         self._train_init()
-        train_loader = TorchDataLoader(dataset=data_train, batch_size=batch_size, collate_fn=self.process_data)
-        test_loader = TorchDataLoader(dataset=data_valid, batch_size=batch_size, collate_fn=self.process_data)
+        train_loader = TorchDataLoader(dataset=data_train, batch_size=batch_size, collate_fn=self.process_data, shuffle=True)
+        test_loader = TorchDataLoader(dataset=data_valid, batch_size=batch_size, collate_fn=self.process_data, shuffle=True)
         total_train_iterations = len(train_loader)
         total_test_iterations = len(test_loader)
 
+        print(f"Total Epoch: {self.config['num_epochs']}, loss fn: {loss_fn.__name__}, batch size: {batch_size}")
         print()
         for epoch in range(self.config["num_epochs"]):
             train_loss = 0
@@ -476,7 +474,7 @@ class GnnPytorchBranchProbabilityModel(Model):
             instances_per_sec = len(data_train) / (end_time - start_time)
 
             training_log = self._store_epoch_data(epoch, loss_fn, train_loss, train_accuracy, train_euclidean, train_tp_fp_tn_fn_labels, log_type='train', instances_per_sec=instances_per_sec)
-            validation_log = self._store_epoch_data(epoch, loss_fn, valid_loss, train_accuracy, valid_euclidean, valid_tp_fp_tn_fn_labels, log_type='valid')
+            validation_log = self._store_epoch_data(epoch, loss_fn, valid_loss, valid_accuracy, valid_euclidean, valid_tp_fp_tn_fn_labels, log_type='valid')
 
             self.write_to_log(training_log)
             self.write_to_log(validation_log)
