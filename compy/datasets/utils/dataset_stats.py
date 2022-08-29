@@ -1,17 +1,17 @@
 import os
+import re
+import csv
 import torch
-import json
+import pickle
 import threading
 from tqdm import tqdm
-from collections import namedtuple
-import pickle
+from collections import namedtuple, Counter
 from torch.utils.data import DataLoader as TorchDataLoader
 from compy.datasets.anghabench_graph import AnghabenchGraphDataset
 
 
 Ratio = namedtuple('Ratio', ['name', 'pct_0', 'pct_03', 'pct_37', 'pct_50', 'pct_62', 'pct_96', 'pct_100'], defaults=(['file_name', 0, 0, 0, 0, 0, 0, 0]))
 LR_Ratio = namedtuple('LR_Ratio', ['name', 'left', 'right'], defaults=(['lr_ratio', 0, 0]))
-# Ratio_files = namedtuple('files', ['name', 'pct_03', 'pct_37', 'pct_50', 'pct_62', 'pct_96', 'pct_100'], defaults=(['file_name', 0, 0, 0, 0, 0, 0]))
 
 dataset_path = os.environ.get('ANGHA_PICKLE_DIR')
 file_name = 'dataset_ratio.pickle'
@@ -34,7 +34,6 @@ def process_data(data):
 
 
 def __build_pg_graphs(batch_graphs, num_types):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pg_graphs = []
     previous_source_node = -1
 
@@ -100,7 +99,8 @@ def left_right_ratio(graph):
 
 def store(data, path):
     with open(path, 'wb') as file:
-        pickle.dump(data, file)
+        for item in data:
+            pickle.dump(item, file)
 
 
 def process_batches(dataset, start_idx=0):
@@ -113,10 +113,10 @@ def process_batches(dataset, start_idx=0):
 
     for batch in tqdm(torch_loader):
         graphs = __build_pg_graphs(batch, dataset.num_types)
-        file_name = f"batch-{start_idx}.json"
+        file_name = f"batch-{start_idx}.pickle"
         save_file = os.path.join(store_path, file_name)
         with open(save_file, 'wb') as file:
-            json.dump(graphs, file)
+            pickle.dump(graphs, file)
         start_idx += 1
     print("Done")
 
@@ -138,8 +138,8 @@ def load_batches():
                     continue
                 batch_percentages = count_percentages(graph)
                 lr_ratio_batch = left_right_ratio(graph)
-                percentages = list(map(lambda a, b: a + b, percentages, batch_percentages))
-                lr_ratio = list(map(lambda a, b: a + b, lr_ratio, lr_ratio_batch))
+                percentages = list(map(lambda total_percentag_count, batch_percentage_count: total_percentag_count + batch_percentage_count, percentages, batch_percentages))
+                lr_ratio = list(map(lambda total_lr_count, batch_lr_count: total_lr_count + batch_lr_count, lr_ratio, lr_ratio_batch))
 
     file_name = "class_ratio_left_right_ratio.pickle"
     data = {
@@ -198,5 +198,61 @@ def threaded():
     t2.start()
 
 
-# load_batches()
-load_info()
+def generate_csv():
+    basepath = os.path.split(store_path)[0]
+    processed_dir = "processed_batches"
+    path = os.path.join(basepath, processed_dir)
+    files = [f"{path}/{file}" for file in os.listdir(path)]
+    csv_file = os.path.join(basepath, "dataset_ratio.csv")
+    index = 0
+    header = ["batch_file", "0", "3", "37", "50", "62", "96", "100", "left", "right"]
+
+    if os.path.isfile(csv_file):
+        response = input("File already exists. Do you really want to overwrite it? y/N\n")
+        if response != "y" or response != "Y":
+            return
+
+    with open(csv_file, 'w') as output_file:
+        writer = csv.writer(output_file)
+        writer.writerow(header)
+        for file_name in tqdm(files):
+            with open(file_name, 'rb') as file:
+                graphs = pickle.load(file)
+                for graph in graphs:
+                    if len(graph) < 1:
+                        continue
+                    percent_count = count_percentages(graph)
+                    lr_ratio = left_right_ratio(graph)
+                    item = f"batch_{index}"
+                    writer.writerow([item] + percent_count + lr_ratio)
+                    index += 1
+
+def compute_num_type_stats():
+    max_num_types = 0
+    store_data = {}
+    pickle_files = os.listdir(dataset_path)
+    sorting_pattern = "(\d+)"
+    re_sorting = re.compile(sorting_pattern)
+    numerical_sort = lambda file_name: int(re_sorting.match(file_name).group())
+    pickle_files.sort(key=numerical_sort)
+    num_types = []
+    for file in tqdm(pickle_files, desc="Computing max num_types of graphs..."):
+        filename = f"{dataset_path}/{file}"
+        with open(filename, "rb") as f:
+            collection = pickle.load(f)
+            num_type = collection["num_types"]
+            if num_type > max_num_types:
+                max_num_types = num_type
+            num_types.append(num_type)
+
+    distribution = Counter(num_types)
+    store_data["num_types_per_file"] = num_types
+    store_data["distribution"] = distribution
+    store_data["max_num_type"] = max_num_types
+    store_data["most_common"] = distribution.most_common()
+
+    basepath = os.path.split(store_path)[0]
+    filename = os.path.join(basepath, "num_types_distribution.pickle")
+
+    with open(filename, "rb") as f:
+        pickle.dump(store_data, f)
