@@ -33,10 +33,13 @@ class Net(torch.nn.Module):
     def forward(
             self, graph, dimension=0,
     ):
-        #FIXME: This part might be ram intensive
-        x, edge_index, batch, index = graph.x, graph.edge_index, graph.batch, graph.source_nodes
-        indices = [node_idx for sublist in index for node_idx in sublist]
-        idx = torch.LongTensor(indices)
+        x, edge_index, batch, index, offsets = graph.x, graph.edge_index, graph.batch, graph.source_nodes, graph.offset
+        offsets = offsets.roll(1)
+        offsets[0] = 0
+        offsets = offsets.cumsum(dim=0)
+        indices = tuple(torch.tensor(source_nodes, dtype=int).cuda() + offsets[idx] for idx, source_nodes in enumerate(index))
+        idx = torch.cat(indices)
+
         idx = idx.to(batch.device)
 
         x = self.reduce(x)
@@ -111,7 +114,6 @@ class GnnPytorchBranchProbabilityModel(Model):
                 last_element = batch_graph[probability][index][-1]
                 edge_type = batch_graph[probability][index][1]
                 source_node = edge[0]
-                # edge_type = edge[1]
                 edge_index.append([source_node, edge[2]])
                 edge_features.append(edge_type)
 
@@ -255,19 +257,46 @@ class GnnPytorchBranchProbabilityModel(Model):
     def _test_init(self):
         self.model.eval()
 
-    def _train_with_batch(self, batch, loss_fn):
-        sample_loss = 0
+    def _train_with_batch(self, batch, loss_fn, with_loader=False):
+        train_loss = 0
         euclidean_distance = 0
         tp, tn, fp, fn = 0, 0, 0, 0
         train_accuracies = [0., 0., 0.]
         batch_size = self.config["batch_size"]
 
-        graph = self.__build_pg_graphs(batch)
-        loader = GeometricDataLoader(graph, batch_size=batch_size)
+        if with_loader:
 
-        for data in loader:
-            # data = data.to(self.device)
+            graph = self.__build_pg_graphs(batch)
+            loader = GeometricDataLoader(graph, batch_size=batch_size)
 
+            for data in loader:
+                # data = data.to(self.device)
+
+                self.model.train() #TODO: check if this is really necessary for every batch => move this line to init
+                self.opt.zero_grad()
+
+                pred = self.model(data)
+                size = pred.shape[0]
+                # FIXME checkout where the error might be coming from
+                if size <= 1:
+                    continue
+                pred_left = pred[:, 0]
+                truth = data.y[:, 0]
+                loss = loss_fn(pred_left, truth)
+
+                loss.backward()
+                self.opt.step()
+
+                train_loss += loss.item()
+                errors = torch.abs(truth - pred_left)
+                sample_count = len(truth)
+                train_accuracies = self._calculate_accuracy_with_threshold(errors, sample_count)
+                tp, tn, fp, fn = self._collect_branch_labels(truth, pred_left)
+                exponent = 2
+                euclidean_distance += torch.sqrt(torch.sum(torch.pow((truth - pred_left), exponent).view(-1))).item()
+
+        else:
+            data = batch.to(self.device)
             self.model.train() #TODO: check if this is really necessary for every batch => move this line to init
             self.opt.zero_grad()
 
@@ -275,7 +304,8 @@ class GnnPytorchBranchProbabilityModel(Model):
             size = pred.shape[0]
             # FIXME checkout where the error might be coming from
             if size <= 1:
-                continue
+                return train_loss, train_accuracies, euclidean_distance, (tp, tn, fp, fn)
+
             pred_left = pred[:, 0]
             truth = data.y[:, 0]
             loss = loss_fn(pred_left, truth)
@@ -283,7 +313,7 @@ class GnnPytorchBranchProbabilityModel(Model):
             loss.backward()
             self.opt.step()
 
-            sample_loss += loss.item()
+            train_loss += loss.item()
             errors = torch.abs(truth - pred_left)
             sample_count = len(truth)
             train_accuracies = self._calculate_accuracy_with_threshold(errors, sample_count)
@@ -291,31 +321,49 @@ class GnnPytorchBranchProbabilityModel(Model):
             exponent = 2
             euclidean_distance += torch.sqrt(torch.sum(torch.pow((truth - pred_left), exponent).view(-1))).item()
 
-        length_dataset = len(loader.dataset)
-
-        train_loss = sample_loss / length_dataset
-        euclidean_distance /= length_dataset
-
         return train_loss, train_accuracies, euclidean_distance, (tp, tn, fp, fn)
 
-    def _predict_with_batch(self, batch, loss_fn):
+    def _predict_with_batch(self, batch, loss_fn, with_loader=False):
         sample_loss = 0
-        euclidean_distance = 0
+        valid_euclidean = 0
         tp, tn, fp, fn = 0, 0, 0, 0
         valid_accuracies = [0., 0., 0.]
         batch_size = self.config["batch_size"]
 
-        graphs = self.__build_pg_graphs(batch)
-        loader = GeometricDataLoader(graphs, batch_size=batch_size)
-        for data in loader:
-            data = data.to(self.device)
+        if with_loader:
+            graphs = self.__build_pg_graphs(batch)
+            loader = GeometricDataLoader(graphs, batch_size=batch_size)
+            for data in loader:
+                data = data.to(self.device)
 
+                #TODO: check whether torch.no_grad is the same as model.eval()
+                with torch.no_grad():
+                    pred = self.model(data)
+                    size = pred.shape[0]
+                    if size <= 1:
+                        continue
+                    pred_left = pred[:, 0]
+                    truth = data.y[:, 0]
+                    loss = loss_fn(pred_left, truth)
+                    sample_loss += loss.item()
+                    if not data.y.nelement() > 0:
+                        print("uh oh")
+                    truth = data.y[:, 0] if data.y.nelement() > 0 else data.y
+
+                errors = torch.abs(truth - pred_left)
+                valid_accuracies = self._calculate_accuracy_with_threshold(errors, len(truth))
+                tp, tn, fp, fn = self._collect_branch_labels(truth, pred_left)
+                exponent = 2
+                valid_euclidean += torch.sqrt(torch.sum(torch.pow((truth - pred_left), exponent).view(-1))).item()
+
+        else:
+            data = batch.to(self.device)
             #TODO: check whether torch.no_grad is the same as model.eval()
             with torch.no_grad():
                 pred = self.model(data)
                 size = pred.shape[0]
                 if size <= 1:
-                    continue
+                    return valid_accuracies, sample_loss, valid_euclidean, (tp, tn, fp, fn)
                 pred_left = pred[:, 0]
                 truth = data.y[:, 0]
                 loss = loss_fn(pred_left, truth)
@@ -328,11 +376,7 @@ class GnnPytorchBranchProbabilityModel(Model):
             valid_accuracies = self._calculate_accuracy_with_threshold(errors, len(truth))
             tp, tn, fp, fn = self._collect_branch_labels(truth, pred_left)
             exponent = 2
-            euclidean_distance += torch.sqrt(torch.sum(torch.pow((truth - pred_left), exponent).view(-1))).item()
-
-        length_dataset = len(loader.dataset)
-        sample_loss = sample_loss / length_dataset
-        valid_euclidean = euclidean_distance / length_dataset
+            valid_euclidean += torch.sqrt(torch.sum(torch.pow((truth - pred_left), exponent).view(-1))).item()
 
         return valid_accuracies, sample_loss, valid_euclidean, (tp, tn, fp, fn)
 
@@ -414,10 +458,14 @@ class GnnPytorchBranchProbabilityModel(Model):
         loss_fn = F.mse_loss
 
         self._train_init()
-        train_loader = TorchDataLoader(dataset=data_train, batch_size=batch_size, collate_fn=self.process_data, shuffle=True)
-        test_loader = TorchDataLoader(dataset=data_valid, batch_size=batch_size, collate_fn=self.process_data, shuffle=True)
+        # train_loader = TorchDataLoader(dataset=data_train, batch_size=batch_size, collate_fn=self.process_data, shuffle=True)
+        # test_loader = TorchDataLoader(dataset=data_valid, batch_size=batch_size, collate_fn=self.process_data, shuffle=True)
+        train_loader = GeometricDataLoader(data_train, batch_size=batch_size)
+        test_loader = GeometricDataLoader(data_valid, batch_size=batch_size)
         total_train_iterations = len(train_loader)
         total_test_iterations = len(test_loader)
+        train_length_dataset = len(train_loader.dataset)
+        valid_length_dataset = len(test_loader.dataset)
 
         print(f"Total Epoch: {self.config['num_epochs']}, loss fn: {loss_fn.__name__}, batch size: {batch_size}")
         print()
@@ -431,11 +479,15 @@ class GnnPytorchBranchProbabilityModel(Model):
             # Train
             start_time = time.time()
             for index, batch in enumerate(train_loader):
-                train_batch_loss, train_batch_accuracy, euclidean_distance, batch_labels = self._train_with_batch(batch, loss_fn)
-                train_loss, train_accuracy, train_euclidean = self.add_metrics(train_loss, train_accuracy, train_euclidean, train_batch_loss, train_batch_accuracy, euclidean_distance)
-                train_tp_fp_tn_fn_labels = self.add_labels(train_tp_fp_tn_fn_labels, batch_labels)
+                train_batch_loss, train_batch_accuracy, euclidean_distance, train_batch_labels = self._train_with_batch(batch, loss_fn)
 
-                print(f"Training Iteration {index + 1}/{total_train_iterations} batch accuracy: {train_batch_accuracy[1]}, batch loss: {train_batch_loss}, euclidean distance: {euclidean_distance}")
+                train_loss = train_batch_loss / train_length_dataset
+                euclidean_distance /= train_length_dataset
+
+                train_loss, train_accuracy, train_euclidean = self.add_metrics(train_loss, train_accuracy, train_euclidean, train_batch_loss, train_batch_accuracy, euclidean_distance)
+                train_tp_fp_tn_fn_labels = self.add_labels(train_tp_fp_tn_fn_labels, train_batch_labels)
+
+                print(f"Epoch: {epoch} - Training Iteration {index + 1}/{total_train_iterations} batch accuracy: {train_batch_accuracy[1]}, batch loss: {train_batch_loss}, euclidean distance: {euclidean_distance}")
 
             end_time = time.time()
 
@@ -448,10 +500,14 @@ class GnnPytorchBranchProbabilityModel(Model):
             valid_tp_fp_tn_fn_labels = [0, 0, 0, 0]
 
             for index, batch in enumerate(test_loader):
-                batch_accuracy, batch_loss, euclidean_distance, batch_labels = self._predict_with_batch(batch, loss_fn)
-                valid_loss, valid_accuracy, valid_euclidean = self.add_metrics(valid_loss, valid_accuracy, valid_euclidean, batch_loss, batch_accuracy, euclidean_distance)
-                valid_tp_fp_tn_fn_labels = self.add_labels(valid_tp_fp_tn_fn_labels, batch_labels)
-                print(f"Validation Iteration {index + 1}/{total_test_iterations} batch accuracy: {batch_accuracy[1]}, batch loss: {batch_loss}, euclidean distance: {euclidean_distance}")
+                valid_batch_accuracy, valid_batch_loss, euclidean_distance, valid_batch_labels = self._predict_with_batch(batch, loss_fn)
+
+                valid_loss = valid_batch_loss / valid_length_dataset
+                euclidean_distance /= valid_length_dataset
+
+                valid_loss, valid_accuracy, valid_euclidean = self.add_metrics(valid_loss, valid_accuracy, valid_euclidean, valid_batch_loss, valid_batch_accuracy, euclidean_distance)
+                valid_tp_fp_tn_fn_labels = self.add_labels(valid_tp_fp_tn_fn_labels, valid_batch_labels)
+                print(f"Epoch: {epoch} - Validation Iteration {index + 1}/{total_test_iterations} batch accuracy: {valid_batch_accuracy[1]}, batch loss: {valid_batch_loss}, euclidean distance: {euclidean_distance}")
 
             # Logging
             # -> Loss

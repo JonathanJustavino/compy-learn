@@ -123,8 +123,6 @@ class Graph(object):
         return edges
 
     def get_edge_list_tuple(self):
-        #TODO: rework method to handle tuple as data attr and remove edge type tuple from LLVMBPVisitor
-
         nodes_keys = list(self._get_node_attr_dict().keys())
 
         edges = []

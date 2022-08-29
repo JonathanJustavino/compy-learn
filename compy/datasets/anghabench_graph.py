@@ -1,9 +1,13 @@
 import os
 import re
+import tqdm
+import torch
 import pickle
 import numpy as np
-from tqdm import tqdm
+import multiprocessing
+from threading import Thread
 from compy.datasets import IndexCache
+from torch_geometric.data import Data
 from torch_geometric.data import Dataset
 
 
@@ -31,7 +35,7 @@ class AnghabenchGraphDataset(Dataset):
         self.total_num_samples = len(self.graph_indexes)
         self.queue_size = 10
         self.index_cache = IndexCache(self.load_file)
-        super().__init__(self.root, self.__process_data)
+        super().__init__(self.root)
 
     def get_basepath(self, path):
         if self.datafolder_name in path:
@@ -42,13 +46,134 @@ class AnghabenchGraphDataset(Dataset):
         return self.total_num_samples
 
     def get(self, idx):
-        file_index = self.graph_indexes[idx]
-        file_offset, _ = self.file_indexes[file_index]
-        data = self.index_cache.get(file_index)
-        return data["samples"][idx - file_offset]
+        return torch.load(f"{self.processed_dir}/graph_{idx}.pt")
 
-    def process(self):
-        pass
+    def store_graph(self, graph, index):
+        torch.save(graph, f"{self.processed_dir}/graph_{index}.pt")
+
+    def __process_data(self, data):
+        return data
+
+    def process_data(self, data):
+        return [
+            {
+                "nodes": data["x"]["code_rep"].get_node_list(),
+                "edges": data["x"]["code_rep"].get_edge_list_tuple(),
+                "probability": data["x"]["code_rep"].get_edge_list_with_data(),
+            }
+            for data in data
+        ]
+
+    def generate_tensors(self, batch_graphs, hidden_size_orig, total_graph_count):
+        previous_source_node = -1
+        # Graph
+        for graph_index, batch_graph in enumerate(batch_graphs):
+            # Nodes
+            one_hot = np.zeros(
+                (len(batch_graph["nodes"]), hidden_size_orig)
+            )
+            one_hot[np.arange(len(batch_graph["nodes"])), batch_graph["nodes"]] = 1
+
+            # Edges
+            edge_index, edge_features, probability_list, source_nodes = [], [], [], []
+            probability = "probability"
+            for index, edge in enumerate(batch_graph["edges"]):
+                last_element = batch_graph[probability][index][-1]
+                edge_type = batch_graph[probability][index][1]
+                source_node = edge[0]
+                # edge_type = edge[1]
+                edge_index.append([source_node, edge[2]])
+                edge_features.append(edge_type)
+
+                if probability in last_element and edge_type == 5:
+                    if source_node == previous_source_node:
+                        previous_idx = len(probability_list) - 1
+                        probability_list[previous_idx] = (probability_list[previous_idx], last_element[probability])
+                    else:
+                        source_nodes.append(source_node)
+                        probability_list.append(last_element[probability])
+                previous_source_node = source_node
+
+            # Probability Nodes
+            edge_index = torch.tensor(edge_index, dtype=torch.long)
+            edge_features = torch.tensor(edge_features, dtype=torch.long)
+
+            source_nodes = np.array(source_nodes)
+            drop_idxs, drop_nodes, edge_probabilities = self.get_filtered_probability_tensors(probability_list,
+                                                                                              source_nodes)
+
+            along_dimension = 0
+            source_nodes = np.delete(source_nodes, drop_idxs, along_dimension)
+
+            # 1 determine 100 nodes  done
+            # 2 add offset to source nodes
+
+            x = torch.tensor(one_hot, dtype=torch.float)
+            # source_nodes = torch.tensor(source_nodes)
+
+            graph = Data(
+                x=x,
+                edge_index=edge_index.t().contiguous(),
+                edge_features=edge_features,
+                offset=len(x),
+                source_nodes=source_nodes,
+                y=edge_probabilities
+            ).cuda()
+
+            self.store_graph(graph, graph_index + total_graph_count)
+
+    def get_filtered_probability_tensors(self, probability_list, source_nodes):
+        drop_indices = []
+        drop_nodes = []
+        edge_probabilities = []
+        for idx, source_node_prob in enumerate(zip(source_nodes, probability_list)):
+            source_node, prob = source_node_prob
+            if prob == 100:
+                drop_indices.append(idx)
+                drop_nodes.append(source_node)
+                continue
+            edge_probabilities.append(prob)
+        return drop_indices, drop_nodes, torch.tensor(edge_probabilities, dtype=torch.float) / 100
+
+    @staticmethod
+    def get_graph_count_from_file(filename):
+        graph_count_pattern = "(\d+).\w+$"
+        re_graph_count = re.compile(graph_count_pattern)
+        graph_count = int(re_graph_count.search(filename).group(1))
+        return graph_count
+
+    def process(self, files=[]):
+        if len(files) <= 0:
+            files = self.raw_file_names
+        base_path = self.content_dir
+        max_num_types = self.get_num_types()
+        total_graph_count = 0
+        for index, filename in enumerate(tqdm.tqdm(files, desc="Preprocessing raw files")):
+            file_path = f"{base_path}/{filename}"
+            with open(file_path, "rb") as f:
+                wrapped_graphs = pickle.load(f)
+                batch_graphs = wrapped_graphs["samples"]
+                batch_graphs = self.process_data(batch_graphs)
+            self.generate_tensors(batch_graphs, max_num_types, total_graph_count)
+            current_graph_count = self.get_graph_count_from_file(file_path)
+            total_graph_count += current_graph_count
+
+    def parallel(self, num_processes):
+        #FIXME race condition
+        # Splits need to take samples per file into account to avoid race conditions
+        def split(num_splits):
+            split_range, remainder = divmod(len(self.raw_file_names), num_splits)
+            return list(self.raw_file_names[i * split_range +
+                                            min(i, remainder):(i + 1) * split_range
+                                            + min(i + 1, remainder)
+                        ] for i in range(num_splits))
+
+        split_files = split(num_processes)
+        split_files_indexed = [(i, s) for i, s in enumerate(split_files)]
+
+        print("multiprocessing")
+        with multiprocessing.Pool(processes=num_processes) as pool:
+            list(tqdm.tqdm(pool.imap(self.process_subset, split_files_indexed), total=self.raw_file_names))
 
     def download(self):
         pass
@@ -56,6 +181,11 @@ class AnghabenchGraphDataset(Dataset):
     @property
     def raw_file_names(self):
         raw_file_names = os.listdir(self.content_dir)
+        sorting_pattern = "(\d+)"
+        re_sorting = re.compile(sorting_pattern)
+        numerical_sort = lambda file_name: int(re_sorting.match(file_name).group())
+        raw_file_names.sort(key=numerical_sort)
+
         if len(raw_file_names) < 1:
             raise Exception("Raw Files are missing.", raw_file_names)
         return raw_file_names
@@ -132,7 +262,7 @@ class AnghabenchGraphDataset(Dataset):
         re_graph_count = re.compile(graph_count_pattern)
         get_count = lambda file_name: int(re_graph_count.match(file_name).group(1))
 
-        for num_file, file in enumerate(tqdm(pickle_files, desc="Generating lookup table")):
+        for num_file, file in enumerate(tqdm.tqdm(pickle_files, desc="Generating lookup table")):
             graph_count = get_count(file)
             file_indexes[num_file] = [file_offset, graph_count]
             file_offset += graph_count
@@ -149,13 +279,11 @@ class AnghabenchGraphDataset(Dataset):
         )
         return indexes
 
-    def __process_data(self, data):
-        return data
 
     def _compute_num_types(self):
         max_num_types = 0
         pickle_files = os.listdir(self.content_dir)
-        for file in tqdm(pickle_files, desc="Computing max num_types of graphs..."):
+        for file in tqdm.tqdm(pickle_files, desc="Computing max num_types of graphs..."):
             filename = f"{self.content_dir}/{file}"
             with open(filename, "rb") as f:
                 collection = pickle.load(f)
@@ -167,7 +295,7 @@ class AnghabenchGraphDataset(Dataset):
 
     def __rename_pickle_files(self):
         pickle_files = os.listdir(self.content_dir)
-        for file in tqdm(pickle_files, desc="Relabeling pickle files..."):
+        for file in tqdm.tqdm(pickle_files, desc="Relabeling pickle files..."):
             filename = f"{self.content_dir}/{file}"
             if "graph_count" in filename:
                 continue
