@@ -35,6 +35,8 @@ class AnghabenchGraphDataset(Dataset):
         self.total_num_samples = len(self.graph_indexes)
         self.queue_size = 10
         self.index_cache = IndexCache(self.load_file)
+        if self.total_num_samples != len(self.processed_file_names):
+            self.process()
         super().__init__(self.root)
 
     def get_basepath(self, path):
