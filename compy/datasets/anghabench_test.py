@@ -1,6 +1,6 @@
 import pytest
 
-from compy.datasets import AnghabenchDataset
+from compy.datasets import AnghabenchGraphDataset
 from compy.representations import RepresentationBuilder
 
 
@@ -20,7 +20,7 @@ class TestBuilder(RepresentationBuilder):
 
 @pytest.fixture
 def anghabench_fixture():
-    ds = AnghabenchDataset()
+    ds = AnghabenchGraphDataset()
     yield ds
 
 
