@@ -23,7 +23,7 @@ class Net(torch.nn.Module):
         annotation_size = config["hidden_size_orig"]
         sequence_length = config["num_layers"]
         in_channel = config["gnn_h_size"]
-        branch_count = 2
+        branch_count = 1
 
         self.reduce = nn.Linear(annotation_size, in_channel)
         # TODO incease in_channel to annotation_size
@@ -44,11 +44,12 @@ class Net(torch.nn.Module):
 
         x = self.reduce(x)
         x = self.gg_conv_1(x, edge_index)
-        x = F.relu(x)
+        x = F.sigmoid(x)
 
         x = torch.index_select(x, dimension, idx)
         x = self.lin(x)
-        x = F.softmax(x)
+        # x = F.softmax(x)
+        x = F.sigmoid(x)
 
         return x
 
@@ -408,8 +409,6 @@ class GnnPytorchBranchProbabilityModel(Model):
         loss_fn = F.mse_loss
 
         self._train_init()
-        # train_loader = TorchDataLoader(dataset=data_train, batch_size=batch_size, collate_fn=self.process_data, shuffle=True)
-        # test_loader = TorchDataLoader(dataset=data_valid, batch_size=batch_size, collate_fn=self.process_data, shuffle=True)
         train_loader = GeometricDataLoader(data_train, batch_size=batch_size)
         test_loader = GeometricDataLoader(data_valid, batch_size=batch_size)
         total_train_iterations = len(train_loader)
