@@ -5,7 +5,6 @@ import torch
 import pickle
 import numpy as np
 import multiprocessing
-from threading import Thread
 from compy.datasets import IndexCache
 from torch_geometric.data import Data
 from torch_geometric.data import Dataset
@@ -22,22 +21,44 @@ class AnghabenchGraphDataset(Dataset):
     - total_num_samples: amount of entire samples in dataset
     """
 
-    def __init__(self):
+    def __init__(self, non_empty=False):
         self.datafolder_name = "ExtractGraphsTask"
         self.root = self.get_basepath(os.environ.get('ANGHA_PICKLE_DIR'))
         self._setup_directories()
         self.graph_indexes_file_path = f"{self.dataset_info_path}/graphs_info.pickle"
         self.max_num_types_file_path = f"{self.dataset_info_path}/max_num_types.pickle"
+        self.non_empty_samples_file_path = f"{self.dataset_info_path}/non_empty_samples.pickle"
         self.graph_indexes = []
         self.file_indexes = []
+        self.non_empty_samples = []
         self.compute_indexes()
         self.num_types = self.get_num_types()
+        self.index_cache = IndexCache(self.load_file, max_cache_size=1000)
         self.total_num_samples = len(self.graph_indexes)
-        self.queue_size = 10
-        self.index_cache = IndexCache(self.load_file)
         if self.total_num_samples != len(self.processed_file_names):
             self.process()
+        if non_empty:
+            EMPTY_COUNT = 345035
+            self.non_empty_samples = self.load_non_empty_sample()
+            if self.total_num_samples - len(self.non_empty_samples) < EMPTY_COUNT:
+                print("Recomputing empty samples")
+                self.post_process()
+                total = [self.get_file_idx_from_name(sample) for sample in self.processed_file_names]
+                file = f"{self.root}/dataset_info/empty_sample_indexes.pickle"
+                with open(file, "rb") as f:
+                    empty_samples = pickle.load(f)
+                    for sample in tqdm.tqdm(empty_samples):
+                        total.remove(sample)
+            print("Loading non empty samples")
+            self.total_num_samples = len(self.non_empty_samples)
         super().__init__(self.root)
+
+
+    def rem(self, total, empty):
+        for index, sample in enumerate(empty):
+            del total[sample - 1]
+            if index > 100:
+                return total
 
     def get_basepath(self, path):
         if self.datafolder_name in path:
@@ -47,15 +68,17 @@ class AnghabenchGraphDataset(Dataset):
     def len(self):
         return self.total_num_samples
 
-    def get(self, idx):
-        return torch.load(f"{self.processed_dir}/graph_{idx}.pt")
+    def get(self, index):
+        return torch.load(f"{self.processed_dir}/graph_{self.non_empty_samples[index]}.pt")
 
     def store_graph(self, graph, index):
-        torch.save(graph, f"{self.processed_dir}/graph_{index}.pt")
+        torch.save(graph, f"{self.processed_dir}/graph_{self.non_empty_samples[index]}.pt")
 
+    @staticmethod
     def __process_data(self, data):
         return data
 
+    @staticmethod
     def process_data(self, data):
         return [
             {
@@ -107,11 +130,7 @@ class AnghabenchGraphDataset(Dataset):
             along_dimension = 0
             source_nodes = np.delete(source_nodes, drop_idxs, along_dimension)
 
-            # 1 determine 100 nodes  done
-            # 2 add offset to source nodes
-
             x = torch.tensor(one_hot, dtype=torch.float)
-            # source_nodes = torch.tensor(source_nodes)
 
             graph = Data(
                 x=x,
@@ -124,7 +143,8 @@ class AnghabenchGraphDataset(Dataset):
 
             self.store_graph(graph, graph_index + total_graph_count)
 
-    def get_filtered_probability_tensors(self, probability_list, source_nodes):
+    @staticmethod
+    def get_filtered_probability_tensors(probability_list, source_nodes):
         drop_indices = []
         drop_nodes = []
         edge_probabilities = []
@@ -159,6 +179,57 @@ class AnghabenchGraphDataset(Dataset):
             self.generate_tensors(batch_graphs, max_num_types, total_graph_count)
             current_graph_count = self.get_graph_count_from_file(file_path)
             total_graph_count += current_graph_count
+
+    @staticmethod
+    def _split(num_splits, files):
+        split_range, remainder = divmod(len(files), num_splits)
+        return list(files[i * split_range + min(i, remainder):(i + 1) * split_range + min(i + 1, remainder)]
+                    for i in range(num_splits))
+
+    @staticmethod
+    def get_file_idx_from_name(file):
+        get_file_idx = re.compile("\d+")
+        return int(re.search(get_file_idx, file).group())
+
+    def filter_empty_sample(self, files):
+        index, split = files
+        non_empty = []
+        for idx in tqdm.tqdm(split, total=len(split), desc=f"Processing {index}", disable=False):
+            sample = self.get(idx)
+            target = sample.y
+            if len(target) > 0:
+                continue
+            non_empty.append(idx)
+        return non_empty
+
+    def post_process(self, files=[], empty_count=345035):
+        threads = 8
+        if len(files) <= 0:
+            files = [self.get_file_idx_from_name(sample) for sample in self.processed_file_names]
+
+        chunked_files = self._split(threads, files)
+        tasks_split_indexed = [(index, split) for index, split in enumerate(chunked_files)]
+        with multiprocessing.Pool(processes=threads) as pool:
+            results = list(tqdm.tqdm(pool.imap(self.filter_empty_sample, tasks_split_indexed), total=len(files), desc="Processing...", disable=True))
+        pool.close()
+        pool.join()
+
+        # Filter out empty samples
+        from itertools import chain
+        empty_sample_indexes = list(chain.from_iterable(results))
+        filename = 'empty_sample_indexes.pickle'
+        file_path = f"{self.root}/dataset_info/{filename}"
+        with open(file_path, 'wb') as file:
+            pickle.dump(empty_sample_indexes, file)
+
+    def load_non_empty_sample(self):
+        file_path = self.non_empty_samples_file_path
+        is_file = os.path.exists(file_path)
+        if is_file:
+            with open(file_path, 'rb') as file:
+                non_empty = pickle.load(file)
+            return non_empty
+        return []
 
     def parallel(self, num_processes):
         #FIXME race condition
@@ -281,7 +352,7 @@ class AnghabenchGraphDataset(Dataset):
         )
         return indexes
 
-
+    @staticmethod
     def _compute_num_types(self):
         max_num_types = 0
         pickle_files = os.listdir(self.content_dir)
