@@ -49,10 +49,14 @@ class AnghabenchGraphDataset(Dataset):
                     empty_samples = pickle.load(f)
                     for sample in tqdm.tqdm(empty_samples):
                         total.remove(sample)
+                    with open(self.non_empty_samples_file_path, 'wb') as f:
+                        pickle.dump(total, f)
             print("Loading non empty samples")
             self.total_num_samples = len(self.non_empty_samples)
-        super().__init__(self.root)
+        if not non_empty:
+            self.get = self.get_from_unfiltered
 
+        super().__init__(self.root)
 
     def rem(self, total, empty):
         for index, sample in enumerate(empty):
@@ -64,6 +68,9 @@ class AnghabenchGraphDataset(Dataset):
         if self.datafolder_name in path:
             path = os.path.split(path)[0]
         return path
+
+    def get_from_unfiltered(self, index):
+        return torch.load(f"{self.processed_dir}/graph_{index}.pt")
 
     def len(self):
         return self.total_num_samples
