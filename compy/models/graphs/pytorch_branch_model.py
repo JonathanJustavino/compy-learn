@@ -55,7 +55,7 @@ class Net(torch.nn.Module):
 
 
 class GnnPytorchBranchProbabilityModel(Model):
-    def __init__(self, config=None, num_types=None):
+    def __init__(self, config=None, num_types=None, folder=None):
         if not config:
             config = {
                 "num_layers": 16,
@@ -68,15 +68,19 @@ class GnnPytorchBranchProbabilityModel(Model):
             }
         super().__init__(config)
 
-        date = datetime.datetime.now().strftime("%d-%m-%Y--%H:%M:%S")
-        thresholds = namedtuple('thresholds', ['small', 'medium', 'large', 'binary'])
         in_place_flag = True
+        thresholds = namedtuple('thresholds', ['small', 'medium', 'large', 'binary'])
+        date = datetime.datetime.now().strftime("%d-%m-%Y--%H:%M:%S")
+        if folder:
+            date = folder
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = Net(config)
         self.model = self.model.to(self.device)
-        self.log_file = f"{date}-layers-{config['num_layers']}-batch_size_{config['batch_size']}-hidden_size_{config['gnn_h_size']}_lr_{config['learning_rate']}"
         self.training_logs = f"{os.path.expanduser('~')}/training-logs/"
+        self.results_folder = f"{self.training_logs}{date}"
+        self.log_file = f"{date}-layers-{config['num_layers']}-batch_size_{config['batch_size']}-hidden_size_{config['gnn_h_size']}_lr_{config['learning_rate']}"
+        self.state_dict_path = f"{date}_model_state_dict"
         self.lr_scheduler = None
         self.thresholds = thresholds(
             nn.Threshold(0.05, 0, inplace=in_place_flag),
@@ -86,6 +90,8 @@ class GnnPytorchBranchProbabilityModel(Model):
         )
         if not os.path.exists(self.training_logs):
             os.mkdir(self.training_logs)
+        if not os.path.exists(self.results_folder):
+            os.mkdir(self.results_folder)
 
     def process_data(self, data):
         return [
@@ -182,15 +188,6 @@ class GnnPytorchBranchProbabilityModel(Model):
         filtered = filter(remove_single_branches, probabilities)
         edge_probabilities = list(filtered)
 
-        # edge_probabilities = []
-        # for index, prob in enumerate(probabilities):
-        #     if prob == 100:
-        #         edge_probabilities.append([prob, 0])
-        #         continue
-        #     if prob == 0:
-        #         edge_probabilities.append([prob, 100])
-
-
         return torch.tensor(edge_probabilities, dtype=torch.float, device=self.device) / 100
 
     def _calculate_accuracy_with_threshold(self, errors, total_values):
@@ -201,6 +198,21 @@ class GnnPytorchBranchProbabilityModel(Model):
             ((total_values - torch.count_nonzero(self.thresholds.medium(errors))).item() / total_values),
             ((total_values - torch.count_nonzero(self.thresholds.large(errors))).item() / total_values)
         ]
+
+    def add_metrics(self, loss, accuracy, euclidean, batch_loss, batch_accuracy, batch_euclidean):
+        loss += batch_loss
+        euclidean += batch_euclidean
+        accuracy[0] += batch_accuracy[0]  # accuracy with small threshold
+        accuracy[1] += batch_accuracy[1]  # accuracy with medium threshold
+        accuracy[2] += batch_accuracy[2]  # accuracy with large threshold
+        return loss, accuracy, euclidean
+
+    def add_labels(self, branch_labels, new_labels):
+        branch_labels[0] += new_labels[0]
+        branch_labels[1] += new_labels[1]
+        branch_labels[2] += new_labels[2]
+        branch_labels[3] += new_labels[3]
+        return branch_labels
 
     # FIXME How can this be calculated
     def fixme_thresholded_branch_labels(self, truth, prediction):
@@ -328,7 +340,7 @@ class GnnPytorchBranchProbabilityModel(Model):
         return valid_accuracies, sample_loss, valid_euclidean, (tp, tn, fp, fn)
 
     def write_to_log(self, log, encoding='UTF-8'):
-        file_path = f"{self.training_logs}/{self.log_file}-{log['type']}.csv"
+        file_path = f"{self.results_folder}/{self.log_file}-{log['type']}.csv"
 
         if not os.path.isfile(file_path):
             self._create_log(file_path, log)
@@ -383,24 +395,25 @@ class GnnPytorchBranchProbabilityModel(Model):
         }
         return log
 
-    def add_metrics(self, loss, accuracy, euclidean, batch_loss, batch_accuracy, batch_euclidean):
-        loss += batch_loss
-        euclidean += batch_euclidean
-        accuracy[0] += batch_accuracy[0]  # accuracy with small threshold
-        accuracy[1] += batch_accuracy[1]  # accuracy with medium threshold
-        accuracy[2] += batch_accuracy[2]  # accuracy with large threshold
-        return loss, accuracy, euclidean
+    def save_model(self):
+        torch.save(self.model.state_dict(), self.state_dict_path)
 
-    def add_labels(self, branch_labels, new_labels):
-        branch_labels[0] += new_labels[0]
-        branch_labels[1] += new_labels[1]
-        branch_labels[2] += new_labels[2]
-        branch_labels[3] += new_labels[3]
-        return branch_labels
+    def initialize_training(self, epoch):
+        if os.path.isfile(self.state_dict_path):
+            print("Loading Model")
+            self.model.load_state_dict(torch.load(f"{self.results_folder}/{self.state_dict_path}"))
+        return self.set_epoch_range(epoch)
 
-    def train(self, data_train, data_valid):
+    def set_epoch_range(self, epoch):
+        end = self.config["num_epochs"]
+        if epoch == 0:
+            return range(end)
+        return range(epoch, end)
+
+    def train(self, data_train, data_valid, epoch=0):
         train_summary = []
         valid_summary = []
+        epoch_range = self.initialize_training(epoch)
 
         if len(data_train) < 2:
             self.log_file = f"{self.log_file}-single-sample_{data_train.indices[0]}"
@@ -418,7 +431,7 @@ class GnnPytorchBranchProbabilityModel(Model):
 
         print(f"Total Epoch: {self.config['num_epochs']}, loss fn: {loss_fn.__name__}, batch size: {batch_size}")
         print()
-        for epoch in range(self.config["num_epochs"]):
+        for epoch in epoch_range:
             train_loss = 0
             train_euclidean = 0
             train_accuracy = [0., 0., 0.]
@@ -484,10 +497,13 @@ class GnnPytorchBranchProbabilityModel(Model):
             self.write_to_log(training_log)
             self.write_to_log(validation_log)
 
+            if epoch > 100 and epoch % 100 == 0 or epoch == epoch_range:
+                print("Saving Model")
+                self.save_model()
+
             print(
-                "epoch: %i, train_loss: %.8f, train_accuracy: %.4f, valid_accuracy:"
-                " %.4f, train instances/sec: %.2f"
-                % (epoch, train_loss, train_accuracy[1], valid_accuracy[1], instances_per_sec)
+                f"epoch: {epoch}, train_loss: {train_loss}, train_accuracy: {train_accuracy[0]}, "
+                f"valid_accuracy: {valid_accuracy}, train instances/sec: {instances_per_sec}"
             )
 
             train_summary.append(train_accuracy)
