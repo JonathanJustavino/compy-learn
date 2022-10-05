@@ -396,7 +396,7 @@ class GnnPytorchBranchProbabilityModel(Model):
         return log
 
     def save_model(self):
-        torch.save(self.model.state_dict(), self.state_dict_path)
+        torch.save(self.model.state_dict(), f"{self.results_folder}/{self.state_dict_path}")
 
     def initialize_training(self, epoch):
         if os.path.isfile(self.state_dict_path):
