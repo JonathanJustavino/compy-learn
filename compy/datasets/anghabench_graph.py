@@ -78,6 +78,10 @@ class AnghabenchGraphDataset(Dataset):
     def get(self, index):
         return torch.load(f"{self.processed_dir}/graph_{self.non_empty_samples[index]}.pt")
 
+    @property
+    def total_branches(self):
+        return torch.load(f"{self.dataset_info_path}/total_branch_count.pt")
+
     def store_graph(self, graph, index):
         torch.save(graph, f"{self.processed_dir}/graph_{self.non_empty_samples[index]}.pt")
 
