@@ -296,8 +296,7 @@ class GnnPytorchBranchProbabilityModel(Model):
         sample_count = len(truth)
         mispredicted_branches = self._calculate_mispredicted_branches_with_threshold(errors, sample_count)
         tp, tn, fp, fn = self._collect_branch_labels(truth, pred_left)
-        exponent = 2
-        euclidean_distance += torch.sqrt(torch.sum(torch.pow((truth - pred_left), exponent).view(-1))).item()
+        euclidean_distance += torch.sqrt(torch.sum(torch.square(truth - pred_left))).item()
 
         return train_loss, mispredicted_branches, euclidean_distance, (tp, tn, fp, fn)
 
@@ -326,8 +325,7 @@ class GnnPytorchBranchProbabilityModel(Model):
         errors = torch.abs(truth - pred_left)
         mispredicted_branches = self._calculate_mispredicted_branches_with_threshold(errors, len(truth))
         tp, tn, fp, fn = self._collect_branch_labels(truth, pred_left)
-        exponent = 2
-        valid_euclidean += torch.sqrt(torch.sum(torch.pow((truth - pred_left), exponent).view(-1))).item()
+        valid_euclidean += torch.sqrt(torch.sum(torch.square(truth - pred_left))).item()
 
         return valid_loss, mispredicted_branches, valid_euclidean, (tp, tn, fp, fn)
 
@@ -415,8 +413,8 @@ class GnnPytorchBranchProbabilityModel(Model):
         train_length_dataset = train_dataset.total_branches
         test_length_dataset = test_dataset.total_branches
         # -> Loss
-        train_loss = train_loss / train_length_dataset
-        test_loss = test_loss / test_length_dataset
+        train_loss /= train_length_dataset
+        test_loss /= test_length_dataset
 
         # -> Accuracy
         for index in range(len(train_accuracies)):
@@ -424,8 +422,8 @@ class GnnPytorchBranchProbabilityModel(Model):
             test_accuracies[index] = (test_length_dataset - test_accuracies[index]) / test_length_dataset
 
         # -> Euclidean Distance
-        train_euclidean = train_euclidean / train_length_dataset
-        test_euclidean = test_euclidean / test_length_dataset
+        train_euclidean /= train_length_dataset
+        test_euclidean /= test_length_dataset
 
         return train_accuracies, test_accuracies, train_loss, test_loss, train_euclidean, test_euclidean
 
