@@ -55,7 +55,7 @@ class Net(torch.nn.Module):
 
 
 class GnnPytorchBranchProbabilityModel(Model):
-    def __init__(self, config=None, num_types=None, folder=None):
+    def __init__(self, config=None, num_types=None, folder=None, train_weights=None, test_weights=None):
         if not config:
             config = {
                 "num_layers": 16,
@@ -82,6 +82,9 @@ class GnnPytorchBranchProbabilityModel(Model):
         self.log_file = f"{date}-layers-{config['num_layers']}-batch_size_{config['batch_size']}-hidden_size_{config['gnn_h_size']}_lr_{config['learning_rate']}"
         self.state_dict_path = f"{date}_model_state_dict"
         self.lr_scheduler = None
+        self.cls_weights = None
+        self.train_weights = train_weights
+        self.test_weights = test_weights
         self.thresholds = thresholds(
             nn.Threshold(0.05, 0, inplace=in_place_flag),
             nn.Threshold(0.1, 0, inplace=in_place_flag),
@@ -190,7 +193,7 @@ class GnnPytorchBranchProbabilityModel(Model):
 
         return torch.tensor(edge_probabilities, dtype=torch.float, device=self.device) / 100
 
-    def _calculate_mispredicted_branches_with_threshold(self, errors, total_values):
+    def _calculate_mispredicted_branches_with_threshold(self, errors):
         # Replace correct values with zero, to count them afterwards
 
         return [
@@ -257,8 +260,6 @@ class GnnPytorchBranchProbabilityModel(Model):
         self.opt = torch.optim.Adam(
             self.model.parameters(), lr=self.config["learning_rate"]
         )
-        # TODO: Experimental, might not be beneficial for the training process
-        self.lr_scheduler = torch.optim.lr_scheduler.StepLR(self.opt, step_size=10, gamma=0.95)
         # if not data_train or data_valid:
         #     return
         # return self.__process_data(data_train), self.__process_data(data_valid)
@@ -286,7 +287,7 @@ class GnnPytorchBranchProbabilityModel(Model):
 
         pred_left = pred[:, 0]
         truth = data.y[:, 0]
-        loss = loss_fn(pred_left, truth)
+        loss = loss_fn(pred_left, truth, weights=self.train_weights)
 
         loss.backward()
         self.opt.step()
@@ -294,7 +295,7 @@ class GnnPytorchBranchProbabilityModel(Model):
         train_loss += loss.item()
         errors = torch.abs(truth - pred_left)
         sample_count = len(truth)
-        mispredicted_branches = self._calculate_mispredicted_branches_with_threshold(errors, sample_count)
+        mispredicted_branches = self._calculate_mispredicted_branches_with_threshold(errors)
         tp, tn, fp, fn = self._collect_branch_labels(truth, pred_left)
         euclidean_distance += torch.sqrt(torch.sum(torch.square(truth - pred_left))).item()
 
@@ -316,14 +317,14 @@ class GnnPytorchBranchProbabilityModel(Model):
                 return mispredicted_branches, valid_loss, valid_euclidean, (tp, tn, fp, fn)
             pred_left = pred[:, 0]
             truth = data.y[:, 0]
-            loss = loss_fn(pred_left, truth)
+            loss = loss_fn(pred_left, truth, weights=self.test_weights)
             valid_loss += loss.item()
             if not data.y.nelement() > 0:
                 print("uh oh")
             truth = data.y[:, 0] if data.y.nelement() > 0 else data.y
 
         errors = torch.abs(truth - pred_left)
-        mispredicted_branches = self._calculate_mispredicted_branches_with_threshold(errors, len(truth))
+        mispredicted_branches = self._calculate_mispredicted_branches_with_threshold(errors)
         tp, tn, fp, fn = self._collect_branch_labels(truth, pred_left)
         valid_euclidean += torch.sqrt(torch.sum(torch.square(truth - pred_left))).item()
 
@@ -410,20 +411,20 @@ class GnnPytorchBranchProbabilityModel(Model):
 
     @staticmethod
     def compute_epoch_accuracy(train_accuracies, test_accuracies, train_loss, test_loss, train_euclidean, test_euclidean, train_dataset, test_dataset):
-        train_length_dataset = train_dataset.total_branches
-        test_length_dataset = test_dataset.total_branches
+        total_train_branches = train_dataset.total_branches
+        total_test_branches = test_dataset.total_branches
         # -> Loss
-        train_loss /= train_length_dataset
-        test_loss /= test_length_dataset
+        train_loss /= total_train_branches
+        test_loss /= total_test_branches
 
         # -> Accuracy
         for index in range(len(train_accuracies)):
-            train_accuracies[index] = (train_length_dataset - train_accuracies[index]) / train_length_dataset
-            test_accuracies[index] = (test_length_dataset - test_accuracies[index]) / test_length_dataset
+            train_accuracies[index] = (total_train_branches - train_accuracies[index]) / total_train_branches
+            test_accuracies[index] = (total_test_branches - test_accuracies[index]) / total_test_branches
 
         # -> Euclidean Distance
-        train_euclidean /= train_length_dataset
-        test_euclidean /= test_length_dataset
+        train_euclidean /= total_train_branches
+        test_euclidean /= total_test_branches
 
         return train_accuracies, test_accuracies, train_loss, test_loss, train_euclidean, test_euclidean
 
@@ -436,8 +437,8 @@ class GnnPytorchBranchProbabilityModel(Model):
             self.log_file = f"{self.log_file}-single-sample_{data_train.indices[0]}"
 
         batch_size = self.config["batch_size"]
-        loss_fn = F.mse_loss
-
+        # loss_fn = F.mse_loss
+        loss_fn = weighted_mse
         self._train_init()
         train_loader = GeometricDataLoader(data_train, batch_size=batch_size)
         test_loader = GeometricDataLoader(data_valid, batch_size=batch_size)
@@ -525,6 +526,12 @@ def r2_score(prediction, ground_truth):
     squares_sum_total = torch.sum(torch.pow((ground_truth - ground_truth_mean), 2))
     squares_sum_residual = torch.sum(torch.pow((ground_truth - prediction), 2))
     return torch.sub(1, torch.div(squares_sum_residual, squares_sum_total))
+
+
+def weighted_mse(prediction, ground_truth, weights):
+    indexes = (ground_truth * 100).to(torch.int64)
+    weight_mask = torch.gather(weights, dim=0, index=indexes)
+    return (weight_mask * torch.square(prediction - ground_truth)).mean()
 
 
 def get_edge_types(graph):
