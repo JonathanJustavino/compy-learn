@@ -81,6 +81,7 @@ class GnnPytorchBranchProbabilityModel(Model):
         self.results_folder = f"{self.training_logs}{date}"
         self.log_file = f"{date}-layers-{config['num_layers']}-batch_size_{config['batch_size']}-hidden_size_{config['gnn_h_size']}_lr_{config['learning_rate']}"
         self.state_dict_path = f"{date}_model_state_dict"
+        self.optimizer_path = f"{date}_optimizer_state_dict"
         self.lr_scheduler = None
         self.cls_weights = None
         self.train_weights = train_weights
@@ -294,7 +295,6 @@ class GnnPytorchBranchProbabilityModel(Model):
 
         train_loss += loss.item()
         errors = torch.abs(truth - pred_left)
-        sample_count = len(truth)
         mispredicted_branches = self._calculate_mispredicted_branches_with_threshold(errors)
         tp, tn, fp, fn = self._collect_branch_labels(truth, pred_left)
         euclidean_distance += torch.sqrt(torch.sum(torch.square(truth - pred_left))).item()
@@ -388,17 +388,21 @@ class GnnPytorchBranchProbabilityModel(Model):
 
     def save_model(self):
         torch.save(self.model.state_dict(), f"{self.results_folder}/{self.state_dict_path}")
+        torch.save(self.opt.state_dict(), f"{self.results_folder}/{self.optimizer_path}")
 
     def initialize_training(self, epoch):
-        if os.path.isfile(self.state_dict_path):
+        model_path = f"{self.results_folder}/{self.state_dict_path}"
+        optimizer_path = f"{self.results_folder}/{self.optimizer_path}"
+        if os.path.isfile(model_path) and os.path.isfile(optimizer_path):
             print("Loading Model")
-            self.model.load_state_dict(torch.load(f"{self.results_folder}/{self.state_dict_path}"))
+            self.model.load_state_dict(torch.load(model_path))
+            self.opt.load_state_dict(torch.load(optimizer_path))
+            self.model.eval()
         return self.set_epoch_range(epoch)
 
     def set_epoch_range(self, epoch):
         end = self.config["num_epochs"]
-        if epoch == 0:
-            return range(end)
+        end += epoch
         return range(epoch, end)
 
     def add_metrics(self, loss, accuracy, euclidean, batch_loss, batch_accuracy, batch_euclidean):
@@ -531,7 +535,7 @@ def r2_score(prediction, ground_truth):
 def weighted_mse(prediction, ground_truth, weights):
     indexes = (ground_truth * 100).to(torch.int64)
     weight_mask = torch.gather(weights, dim=0, index=indexes)
-    return (weight_mask * torch.square(prediction - ground_truth)).mean()
+    return torch.mean(weight_mask * torch.square(prediction - ground_truth))
 
 
 def get_edge_types(graph):
