@@ -36,7 +36,7 @@ class AnghabenchGraphDataset(Dataset):
         self.index_cache = IndexCache(self.load_file, max_cache_size=1000)
         self.total_num_samples = len(self.graph_indexes)
         if self.total_num_samples != len(self.processed_file_names):
-            self.process()
+            self.parallel(num_processes=8)
         if non_empty:
             EMPTY_COUNT = 345035
             self.non_empty_samples = self.load_non_empty_sample()
@@ -83,14 +83,14 @@ class AnghabenchGraphDataset(Dataset):
         return torch.load(f"{self.dataset_info_path}/total_branch_count.pt")
 
     def store_graph(self, graph, index):
-        torch.save(graph, f"{self.processed_dir}/graph_{self.non_empty_samples[index]}.pt")
+        torch.save(graph, f"{self.processed_dir}/graph_{index}.pt")
 
     @staticmethod
     def __process_data(self, data):
         return data
 
     @staticmethod
-    def process_data(self, data):
+    def process_data(data):
         return [
             {
                 "nodes": data["x"]["code_rep"].get_node_list(),
@@ -140,6 +140,7 @@ class AnghabenchGraphDataset(Dataset):
 
             along_dimension = 0
             source_nodes = np.delete(source_nodes, drop_idxs, along_dimension)
+            source_nodes = torch.tensor(source_nodes)
 
             x = torch.tensor(one_hot, dtype=torch.float)
 
@@ -149,8 +150,9 @@ class AnghabenchGraphDataset(Dataset):
                 edge_features=edge_features,
                 offset=len(x),
                 source_nodes=source_nodes,
+                source_node_count=len(source_nodes),
                 y=edge_probabilities
-            ).cuda()
+            )
 
             self.store_graph(graph, graph_index + total_graph_count)
 
@@ -175,21 +177,23 @@ class AnghabenchGraphDataset(Dataset):
         graph_count = int(re_graph_count.search(filename).group(1))
         return graph_count
 
-    def process(self, files=[]):
+    def process(self, file_split=(0, 0, [])):
+        _, start_graph_count, files = file_split
         if len(files) <= 0:
+            start_graph_count = 0
             files = self.raw_file_names
+
         base_path = self.content_dir
         max_num_types = self.get_num_types()
-        total_graph_count = 0
         for index, filename in enumerate(tqdm.tqdm(files, desc="Preprocessing raw files")):
             file_path = f"{base_path}/{filename}"
             with open(file_path, "rb") as f:
                 wrapped_graphs = pickle.load(f)
                 batch_graphs = wrapped_graphs["samples"]
                 batch_graphs = self.process_data(batch_graphs)
-            self.generate_tensors(batch_graphs, max_num_types, total_graph_count)
+            self.generate_tensors(batch_graphs, max_num_types, start_graph_count)
             current_graph_count = self.get_graph_count_from_file(file_path)
-            total_graph_count += current_graph_count
+            start_graph_count += current_graph_count
 
     @staticmethod
     def _split(num_splits, files):
@@ -242,22 +246,20 @@ class AnghabenchGraphDataset(Dataset):
             return non_empty
         return []
 
-    def parallel(self, num_processes):
-        #FIXME race condition
-        # Splits need to take samples per file into account to avoid race conditions
-        def split(num_splits):
-            split_range, remainder = divmod(len(self.raw_file_names), num_splits)
-            return list(self.raw_file_names[i * split_range +
-                                            min(i, remainder):(i + 1) * split_range
-                                            + min(i + 1, remainder)
-                        ] for i in range(num_splits))
+    def parallel(self, num_processes=8):
+        files = self.raw_file_names
+        split_files = self._split(num_processes, files)
 
-        split_files = split(num_processes)
-        split_files_indexed = [(i, s) for i, s in enumerate(split_files)]
+        graph_count_start_indexes = [sum(list(map(self.get_graph_count_from_file, split))) for split in split_files]
+        graph_count_start_indexes = np.asarray(graph_count_start_indexes)
+        graph_count_start_indexes = np.roll(graph_count_start_indexes, 1)
+        graph_count_start_indexes[0] = 0
+        graph_count_start_indexes = np.cumsum(graph_count_start_indexes)
 
-        print("multiprocessing")
+        split_files_indexed = [(index, graph_count_start_indexes[index], split) for index, split in enumerate(split_files)]
+
         with multiprocessing.Pool(processes=num_processes) as pool:
-            list(tqdm.tqdm(pool.imap(self.process_subset, split_files_indexed), total=self.raw_file_names))
+            list(tqdm.tqdm(pool.imap(self.process, split_files_indexed), total=len(self.raw_file_names)))
 
     def download(self):
         pass
