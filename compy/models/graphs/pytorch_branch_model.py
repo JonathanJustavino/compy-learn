@@ -37,10 +37,13 @@ class Net(torch.nn.Module):
         offsets = offsets.roll(1)
         offsets[0] = 0
         offsets = offsets.cumsum(dim=0)
-        indices = tuple(torch.tensor(source_nodes, dtype=int).cuda() + offsets[idx] for idx, source_nodes in enumerate(index))
-        idx = torch.cat(indices)
+        offset_indexes = torch.repeat_interleave(torch.arange(len(graph.offset)).cuda(), graph.source_node_count)
+        offsets_per_index = torch.gather(offsets, dimension, offset_indexes)
+        idx = index + offsets_per_index
+        # indices = tuple(torch.tensor(source_nodes, dtype=int).cuda() + offsets[idx] for idx, source_nodes in enumerate(index))
+        # idx = torch.cat(indices)
 
-        idx = idx.to(batch.device)
+        # idx = idx.to(batch.device)
 
         x = self.reduce(x)
         x = self.gg_conv_1(x, edge_index)
@@ -444,8 +447,8 @@ class GnnPytorchBranchProbabilityModel(Model):
         # loss_fn = F.mse_loss
         loss_fn = weighted_mse
         self._train_init()
-        train_loader = GeometricDataLoader(data_train, batch_size=batch_size)
-        test_loader = GeometricDataLoader(data_valid, batch_size=batch_size)
+        train_loader = GeometricDataLoader(data_train, batch_size=batch_size, pin_memory=True)
+        test_loader = GeometricDataLoader(data_valid, batch_size=batch_size, pin_memory=True)
         total_train_iterations = len(train_loader)
         total_test_iterations = len(test_loader)
 
@@ -533,7 +536,7 @@ def r2_score(prediction, ground_truth):
 
 
 def weighted_mse(prediction, ground_truth, weights):
-    indexes = (ground_truth * 100).to(torch.int64)
+    indexes = torch.mul(ground_truth, 100).to(torch.int64)
     weight_mask = torch.gather(weights, dim=0, index=indexes)
     return torch.mean(weight_mask * torch.square(prediction - ground_truth))
 
