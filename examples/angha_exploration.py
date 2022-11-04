@@ -33,7 +33,6 @@ ANGHA_FLAG = True
 PREPROCESS_FLAG = not ANGHA_FLAG
 
 dataset = AnghabenchGraphDataset(non_empty=True)
-print(dataset)
 
 combinations = [
     (R.LLVMGraphBuilder, R.LLVMBPVisitor, M.GnnPytorchBranchProbabilityModel),
@@ -89,7 +88,7 @@ def recompute_branch_weights(training_subset, test_subset, batch_size=512, num_w
     return training_weights, testing_weights, total_train_branches, total_test_branches
 
 
-def lookup_branch_weights(training_subset, test_subset, dataset, cache_path="cache/cached_weights.pt", recompute=True):
+def lookup_branch_weights(training_subset, test_subset, dataset, cache_path="cache/cached_weights.pt", recompute=False):
     cache_path = f"{dataset.dataset_info_path}/{cache_path}"
     cache_exists = os.path.exists(cache_path)
     train_indices = []
@@ -144,9 +143,10 @@ for builder, visitor, model in combinations:
     #      How to calculate the distribution, since sample holds multiple ys
 
     amount_samples = dataset.total_num_samples
-    amount_samples = amount_samples // 100
+    amount_samples = amount_samples
     test_range = round(float(amount_samples) * 0.1)
-    train_range = round(amount_samples - test_range)
+    valid_range = round(float(amount_samples) * 0.1)
+    train_range = round(amount_samples - (test_range + valid_range))
 
     # high_branch_count_samples 53541, 124106, 20367, 92786, 60315, 118622
     # similar_distributed_samples = [(106, 148403), (71, 111665), (65, 16409), (74, 157018), (65, 11193), (77, 118622)]
@@ -165,15 +165,16 @@ for builder, visitor, model in combinations:
     # samples = random.sample(non_empty_samples, k=amount)
 
     train_samples = [index for index in range(0, train_range)]
+    validation_samples = [index for index in range(0, valid_range)]
     test_samples = [index for index in range(train_range, amount_samples)]
 
     # train_samples = samples
     # test_samples = samples
 
     train_set = torch.utils.data.Subset(dataset, train_samples)
-    test_set = torch.utils.data.Subset(dataset, test_samples)
+    valid_set = torch.utils.data.Subset(dataset, validation_samples)
 
-    train_weights, test_weights = lookup_branch_weights(train_set, test_set, dataset)
+    train_weights, test_weights = lookup_branch_weights(train_set, valid_set, dataset)
 
     num_types = dataset.num_types
     model_config = {
@@ -189,6 +190,6 @@ for builder, visitor, model in combinations:
     branch_model = model(config=model_config, num_types=num_types, train_weights=train_weights, test_weights=test_weights)
     train_summary = branch_model.train(
         train_set,
-        test_set,
+        valid_set,
     )
     print(train_summary)
