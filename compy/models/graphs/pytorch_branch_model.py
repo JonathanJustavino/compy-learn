@@ -39,11 +39,7 @@ class Net(torch.nn.Module):
         offsets = offsets.cumsum(dim=0)
         offset_indexes = torch.repeat_interleave(torch.arange(len(graph.offset)).cuda(), graph.source_node_count)
         offsets_per_index = torch.gather(offsets, dimension, offset_indexes)
-        idx = index + offsets_per_index
-        # indices = tuple(torch.tensor(source_nodes, dtype=int).cuda() + offsets[idx] for idx, source_nodes in enumerate(index))
-        # idx = torch.cat(indices)
-
-        # idx = idx.to(batch.device)
+        idx = torch.add(index, offsets_per_index)
 
         x = self.reduce(x)
         x = self.gg_conv_1(x, edge_index)
@@ -80,27 +76,41 @@ class GnnPytorchBranchProbabilityModel(Model):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = Net(config)
         self.model = self.model.to(self.device)
+        self.log_file = f"{date}-layers-{config['num_layers']}-batch_size_{config['batch_size']}-hidden_size_{config['gnn_h_size']}_lr_{config['learning_rate']}"
         self.training_logs = f"{os.path.expanduser('~')}/training-logs/"
         self.results_folder = f"{self.training_logs}{date}"
-        self.log_file = f"{date}-layers-{config['num_layers']}-batch_size_{config['batch_size']}-hidden_size_{config['gnn_h_size']}_lr_{config['learning_rate']}"
         self.state_dict_path = f"{date}_model_state_dict"
         self.optimizer_path = f"{date}_optimizer_state_dict"
+        self.train_predictions = f"{self.results_folder}/train_predictions/"
+        self.test_predictions = f"{self.results_folder}/test_predictions/"
         self.lr_scheduler = None
         self.cls_weights = None
         self.train_weights = train_weights
         self.test_weights = test_weights
+        self.detect_missing_folders()
         self.thresholds = thresholds(
             nn.Threshold(0.05, 0, inplace=in_place_flag),
             nn.Threshold(0.1, 0, inplace=in_place_flag),
             nn.Threshold(0.2, 0, inplace=in_place_flag),
             nn.Threshold(0.5, 0, inplace=in_place_flag)
         )
-        if not os.path.exists(self.training_logs):
-            os.mkdir(self.training_logs)
-        if not os.path.exists(self.results_folder):
-            os.mkdir(self.results_folder)
 
-    def process_data(self, data):
+    def detect_missing_folders(self):
+        test_if_present = [
+            self.training_logs,
+            self.results_folder,
+            self.train_predictions,
+            self.test_predictions
+        ]
+
+        for folder in test_if_present:
+            if not os.path.exists(folder):
+                os.mkdir(folder)
+                print(f"Creating directory: {folder}")
+
+
+    @staticmethod
+    def process_data(data):
         return [
             {
                 "nodes": data["x"]["code_rep"].get_node_list(),
@@ -144,7 +154,6 @@ class GnnPytorchBranchProbabilityModel(Model):
 
             # Probability Nodes
             edge_index = torch.tensor(edge_index, dtype=torch.long, device=self.device)
-            # TODO: Inspect edge_features tensor to get a better understanding of the data
             edge_features = torch.tensor(edge_features, dtype=torch.long, device=self.device)
 
             node_count = len(batch_graphs[graph_index - 1]["nodes"]) if graph_index > 0 else 0
@@ -206,7 +215,8 @@ class GnnPytorchBranchProbabilityModel(Model):
             (torch.count_nonzero(self.thresholds.large(errors))).item()
         ]
 
-    def add_labels(self, branch_labels, new_labels):
+    @staticmethod
+    def add_labels(branch_labels, new_labels):
         branch_labels[0] += new_labels[0]
         branch_labels[1] += new_labels[1]
         branch_labels[2] += new_labels[2]
@@ -271,7 +281,7 @@ class GnnPytorchBranchProbabilityModel(Model):
     def _test_init(self):
         self.model.eval()
 
-    def _train_with_batch(self, batch, loss_fn, with_loader=False, debug_inc=0):
+    def _train_with_batch(self, batch, loss_fn, save_path, batch_nr=-1, epoch=0):
         train_loss = .0
         euclidean_distance = 0
         tp, tn, fp, fn = 0, 0, 0, 0
@@ -301,10 +311,11 @@ class GnnPytorchBranchProbabilityModel(Model):
         mispredicted_branches = self._calculate_mispredicted_branches_with_threshold(errors)
         tp, tn, fp, fn = self._collect_branch_labels(truth, pred_left)
         euclidean_distance += torch.sqrt(torch.sum(torch.square(truth - pred_left))).item()
+        self.save_results(save_path, truth, pred_left, epoch, batch_nr)
 
         return train_loss, mispredicted_branches, euclidean_distance, (tp, tn, fp, fn)
 
-    def _predict_with_batch(self, batch, loss_fn, with_loader=False):
+    def _predict_with_batch(self, batch, loss_fn, save_path, batch_nr=-1, epoch=0):
         valid_loss = 0
         valid_euclidean = 0
         tp, tn, fp, fn = 0, 0, 0, 0
@@ -330,6 +341,7 @@ class GnnPytorchBranchProbabilityModel(Model):
         mispredicted_branches = self._calculate_mispredicted_branches_with_threshold(errors)
         tp, tn, fp, fn = self._collect_branch_labels(truth, pred_left)
         valid_euclidean += torch.sqrt(torch.sum(torch.square(truth - pred_left))).item()
+        self.save_results(save_path, truth, pred_left, epoch, batch_nr)
 
         return valid_loss, mispredicted_branches, valid_euclidean, (tp, tn, fp, fn)
 
@@ -343,12 +355,14 @@ class GnnPytorchBranchProbabilityModel(Model):
             writer = csv.writer(file)
             writer.writerow(log["data"])
 
-    def _create_log(self, file_name, log, encoding="UTF-8"):
+    @staticmethod
+    def _create_log(file_name, log, encoding="UTF-8"):
         with open(file_name, 'a', newline='', encoding=encoding) as file:
             writer = csv.writer(file)
             writer.writerow(log["header"])
 
-    def _store_epoch_data(self, epoch, loss_fn, loss, accuracy, euclidean_distance, branch_labels, log_type='train', instances_per_sec=0):
+    @staticmethod
+    def _store_epoch_data(epoch, loss_fn, loss, accuracy, euclidean_distance, branch_labels, log_type='train', instances_per_sec=0):
         header = [
             "epoch",
             f"loss_{loss_fn.__name__}",
@@ -393,6 +407,13 @@ class GnnPytorchBranchProbabilityModel(Model):
         torch.save(self.model.state_dict(), f"{self.results_folder}/{self.state_dict_path}")
         torch.save(self.opt.state_dict(), f"{self.results_folder}/{self.optimizer_path}")
 
+    @staticmethod
+    def save_results(result_path, ground_truth, prediction, epoch, batch_nr):
+        torch.save(
+            {"ground_truth": ground_truth, "prediciton": prediction},
+            f"{result_path}/ep-{epoch}_batch-{batch_nr}.pt"
+        )
+
     def initialize_training(self, epoch):
         model_path = f"{self.results_folder}/{self.state_dict_path}"
         optimizer_path = f"{self.results_folder}/{self.optimizer_path}"
@@ -408,7 +429,8 @@ class GnnPytorchBranchProbabilityModel(Model):
         end += epoch
         return range(epoch, end)
 
-    def add_metrics(self, loss, accuracy, euclidean, batch_loss, batch_accuracy, batch_euclidean):
+    @staticmethod
+    def add_metrics(loss, accuracy, euclidean, batch_loss, batch_accuracy, batch_euclidean):
         loss += batch_loss
         euclidean += batch_euclidean
         accuracy[0] += batch_accuracy[0]  # accuracy with small threshold
@@ -444,13 +466,14 @@ class GnnPytorchBranchProbabilityModel(Model):
             self.log_file = f"{self.log_file}-single-sample_{data_train.indices[0]}"
 
         batch_size = self.config["batch_size"]
-        # loss_fn = F.mse_loss
         loss_fn = weighted_mse
         self._train_init()
         train_loader = GeometricDataLoader(data_train, batch_size=batch_size, pin_memory=True)
         test_loader = GeometricDataLoader(data_valid, batch_size=batch_size, pin_memory=True)
         total_train_iterations = len(train_loader)
         total_test_iterations = len(test_loader)
+        train_predition_path = self.train_predictions
+        test_predition_path = self.test_predictions
 
         print(f"Total Epoch: {self.config['num_epochs']}, loss fn: {loss_fn.__name__}, batch size: {batch_size}")
         print()
@@ -464,9 +487,8 @@ class GnnPytorchBranchProbabilityModel(Model):
             # Train
             start_time = time.time()
             for index, batch in enumerate(train_loader):
-                # FIXME correctly accumulate wrong samples
                 batch_branches = len(batch.y)
-                train_batch_loss, mispredicted_in_batch, euclidean_distance, train_batch_labels = self._train_with_batch(batch, loss_fn, debug_inc=epoch)
+                train_batch_loss, mispredicted_in_batch, euclidean_distance, train_batch_labels = self._train_with_batch(batch, loss_fn, train_predition_path, batch_nr=index, epoch=epoch)
 
                 train_loss, train_accuracy, train_euclidean = self.add_metrics(train_loss, train_accuracy, train_euclidean, train_batch_loss, mispredicted_in_batch, euclidean_distance)
                 train_tp_fp_tn_fn_labels = self.add_labels(train_tp_fp_tn_fn_labels, train_batch_labels)
@@ -489,7 +511,7 @@ class GnnPytorchBranchProbabilityModel(Model):
 
             for index, batch in enumerate(test_loader):
                 batch_branches = len(batch.y)
-                valid_batch_loss, mispredicted_in_batch, euclidean_distance, valid_batch_labels = self._predict_with_batch(batch, loss_fn)
+                valid_batch_loss, mispredicted_in_batch, euclidean_distance, valid_batch_labels = self._predict_with_batch(batch, loss_fn, test_predition_path, batch_nr=index, epoch=epoch)
 
                 valid_loss, valid_accuracy, valid_euclidean = self.add_metrics(valid_loss, valid_accuracy, valid_euclidean, valid_batch_loss, mispredicted_in_batch, euclidean_distance)
                 valid_tp_fp_tn_fn_labels = self.add_labels(valid_tp_fp_tn_fn_labels, valid_batch_labels)
