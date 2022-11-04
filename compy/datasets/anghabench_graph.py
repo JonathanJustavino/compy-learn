@@ -178,14 +178,14 @@ class AnghabenchGraphDataset(Dataset):
         return graph_count
 
     def process(self, file_split=(0, 0, [])):
-        _, start_graph_count, files = file_split
+        thread_number, start_graph_count, files = file_split
         if len(files) <= 0:
             start_graph_count = 0
             files = self.raw_file_names
 
         base_path = self.content_dir
         max_num_types = self.get_num_types()
-        for index, filename in enumerate(tqdm.tqdm(files, desc="Preprocessing raw files")):
+        for index, filename in enumerate(tqdm.tqdm(files, desc=f"{thread_number} - Preprocessing raw files")):
             file_path = f"{base_path}/{filename}"
             with open(file_path, "rb") as f:
                 wrapped_graphs = pickle.load(f)
