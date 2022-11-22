@@ -1,6 +1,7 @@
 import os
+import shutil
+import datetime
 import pickle
-import sys
 import numpy as np
 import torch.utils.data
 import tqdm
@@ -20,23 +21,17 @@ from compy.datasets import dataflow_preprocess
 from compy.datasets.dataflow_preprocess import main as dataflow_main
 
 
-# dataset_path = '/net/home/luederitz/anghabench'
 # FLAGS = flags.FLAGS
 # FLAGS.out_dir = dataset_path
 # FLAGS.preprocess = True
 # FLAGS.eliminate_data_duplicates = True
 # FLAGS.debug = False
 
-
 # Load dataset
 ANGHA_FLAG = True
 PREPROCESS_FLAG = not ANGHA_FLAG
 
 dataset = AnghabenchGraphDataset(non_empty=True)
-
-combinations = [
-    (R.LLVMGraphBuilder, R.LLVMBPVisitor, M.GnnPytorchBranchProbabilityModel),
-]
 
 
 def recompute_branch_weights(training_subset, test_subset, batch_size=512, num_workers=3):
@@ -128,68 +123,95 @@ def lookup_branch_weights(training_subset, test_subset, dataset, cache_path="cac
     return train_weights, test_weights
 
 
-for builder, visitor, model in combinations:
-
-    clang_driver = ClangDriver(
-        ClangDriver.ProgrammingLanguage.C,
-        ClangDriver.OptimizationLevel.O3,
-        [],
-        [],
-    )
-
-    kf = StratifiedKFold(n_splits=10, shuffle=True, random_state=204)
-    print(kf)
-    # TODO: StratifiedKFold with target being tensors with multiple y values
-    #      How to calculate the distribution, since sample holds multiple ys
-
+def split_dataset(dataset):
     amount_samples = dataset.total_num_samples
     amount_samples = amount_samples
     test_range = round(float(amount_samples) * 0.1)
     valid_range = round(float(amount_samples) * 0.1)
     train_range = round(amount_samples - (test_range + valid_range))
 
-    # high_branch_count_samples 53541, 124106, 20367, 92786, 60315, 118622
-    # similar_distributed_samples = [(106, 148403), (71, 111665), (65, 16409), (74, 157018), (65, 11193), (77, 118622)]
-    # unneeded_sample_score = 0
-    # difficult_sample = [(unneeded_sample_score, 34140)]
-    # idx_0100 = 52030
-    # two_balanced = [961679, idx_0100]
-    # balanced = [961679, 33631, 929414, idx_0100]
-
-    # train_samples = balanced
-    # test_samples = balanced
-
-    # import random
-    # non_empty_samples = [i for i in range(len(dataset.non_empty_samples))]
-    # amount = 500
-    # samples = random.sample(non_empty_samples, k=amount)
-
     train_samples = [index for index in range(0, train_range)]
     validation_samples = [index for index in range(0, valid_range)]
     test_samples = [index for index in range(train_range, amount_samples)]
 
-    # train_samples = samples
-    # test_samples = samples
+    training_set = torch.utils.data.Subset(dataset, train_samples)
+    validation_set = torch.utils.data.Subset(dataset, validation_samples)
 
-    train_set = torch.utils.data.Subset(dataset, train_samples)
-    valid_set = torch.utils.data.Subset(dataset, validation_samples)
+    return training_set, validation_set
 
-    train_weights, test_weights = lookup_branch_weights(train_set, valid_set, dataset)
 
-    num_types = dataset.num_types
-    model_config = {
-        "num_layers": 8,
-        "hidden_size_orig": num_types,
-        "gnn_h_size": 80,
-        "learning_rate": 0.0001,
-        "batch_size": 128, # Maybe increase this size
-        "num_epochs": 1100,
-        "num_edge_types": 5,
-    }
+def move_results(training_model, results_path, configurations_length):
+    if configurations_length < 2:
+        return
+    try:
+        shutil.move(training_model.results_folder, results_path)
+    except FileNotFoundError:
+        print(f"An error occurred while trying to move the result files of model {training_model.results_folder}")
 
-    branch_model = model(config=model_config, num_types=num_types, train_weights=train_weights, test_weights=test_weights)
-    train_summary = branch_model.train(
-        train_set,
-        valid_set,
-    )
-    print(train_summary)
+
+def setup_exploration_folder_structure(configuration_amount, out_dir, exploration_path):
+    store_path = exploration_path if exploration_path else out_dir
+    if configuration_amount > 1:
+        date = datetime.datetime.now().strftime("%d-%m-%Y--%H:%M:%S")
+        store_path = os.path.join(store_path, f"explorations-{date}")
+        os.mkdir(store_path)
+        return store_path
+
+
+out_dir = os.environ.get("out_dir")
+exploration_dir = os.environ.get("exploration_results")
+out_dir = out_dir if out_dir else f"{os.path.expanduser('~')}/training-logs/"
+num_types = dataset.num_types
+
+model_config = {
+    "num_layers": 8,
+    "hidden_size_orig": num_types,
+    "gnn_h_size": 80,
+    "learning_rate": 0.0001,
+    "batch_size": 128, # Maybe increase this size
+    "num_epochs": 1,
+    "num_edge_types": 5,
+    "results_dir": out_dir,
+}
+
+combinations = [
+    (R.LLVMGraphBuilder, R.LLVMBPVisitor, M.GnnPytorchBranchProbabilityModel),
+]
+
+configurations = [
+    model_config, model_config, model_config
+]
+
+config_length = len(configurations)
+exploration_dir = setup_exploration_folder_structure(config_length, out_dir, exploration_dir)
+
+
+for builder, visitor, model in combinations:
+    for model_config in configurations:
+
+        clang_driver = ClangDriver(
+            ClangDriver.ProgrammingLanguage.C,
+            ClangDriver.OptimizationLevel.O3,
+            [],
+            [],
+        )
+
+        kf = StratifiedKFold(n_splits=10, shuffle=True, random_state=204)
+        print(kf)
+        # TODO: StratifiedKFold with target being tensors with multiple y values
+        #      How to calculate the distribution, since sample holds multiple ys
+
+        train_set, valid_set = split_dataset(dataset)
+        train_weights, test_weights = lookup_branch_weights(train_set, valid_set, dataset)
+
+        model_config["train_weights"] = train_weights
+        model_config["test_weights"] = test_weights
+
+        branch_model = model(config=model_config)
+        train_summary = branch_model.train(
+            train_set,
+            valid_set,
+        )
+        move_results(branch_model, exploration_dir, config_length)
+
+        print(train_summary)
