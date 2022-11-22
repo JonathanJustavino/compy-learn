@@ -25,10 +25,9 @@ class Net(torch.nn.Module):
         in_channel = config["gnn_h_size"]
         branch_count = 1
 
-        self.reduce = nn.Linear(annotation_size, in_channel)
-        # TODO incease in_channel to annotation_size
+        self.reduce = nn.Linear(annotation_size, in_channel) #TODO: MLP -> Sequential(1,2,4,8 layer)
         self.gg_conv_1 = GatedGraphConv(in_channel, sequence_length)
-        self.lin = nn.Linear(in_channel, branch_count)
+        self.lin = nn.Linear(in_channel, branch_count) #TODO: MLP -> Sequential(1,2,4,8 layer)
 
     def forward(
             self, graph, dimension=0,
@@ -47,46 +46,51 @@ class Net(torch.nn.Module):
 
         x = torch.index_select(x, dimension, idx)
         x = self.lin(x)
-        # x = F.softmax(x)
         x = torch.sigmoid(x)
 
         return x
 
 
 class GnnPytorchBranchProbabilityModel(Model):
-    def __init__(self, config=None, num_types=None, folder=None, train_weights=None, test_weights=None):
+    def __init__(self, config=None, folder=None):
+        default_path = f"{os.path.expanduser('~')}/training-logs/"
+        self.date = datetime.datetime.now().strftime("%d-%m-%Y--%H:%M:%S")
+
+        if folder:
+            self.date = folder
+
         if not config:
             config = {
                 "num_layers": 16,
-                "hidden_size_orig": num_types,
+                "hidden_size_orig": 80,
                 "gnn_h_size": 80,
                 "learning_rate": 0.001,
                 "batch_size": 32,
                 "num_epochs": 350,
                 "num_edge_types": 5,
+                "results_dir": default_path,
+                "folder_name": self.date,
             }
         super().__init__(config)
 
         in_place_flag = True
+        config["folder_name"] = self.date
         thresholds = namedtuple('thresholds', ['small', 'medium', 'large', 'binary'])
-        date = datetime.datetime.now().strftime("%d-%m-%Y--%H:%M:%S")
-        if folder:
-            date = folder
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = Net(config)
         self.model = self.model.to(self.device)
-        self.log_file = f"{date}-layers-{config['num_layers']}-batch_size_{config['batch_size']}-hidden_size_{config['gnn_h_size']}_lr_{config['learning_rate']}"
-        self.training_logs = f"{os.path.expanduser('~')}/training-logs/"
-        self.results_folder = f"{self.training_logs}{date}"
-        self.state_dict_path = f"{date}_model_state_dict"
-        self.optimizer_path = f"{date}_optimizer_state_dict"
+        self.log_file = f"{self.date}-layers-{config['num_layers']}-batch_size_{config['batch_size']}-hidden_size_{config['gnn_h_size']}_lr_{config['learning_rate']}"
+        self.training_logs = default_path
+        self.results_folder = os.path.join(config["results_dir"], self.date)
+        self.state_dict_path = f"{self.date}_model_state_dict"
+        self.optimizer_path = f"{self.date}_optimizer_state_dict"
         self.train_predictions = f"{self.results_folder}/train_predictions/"
         self.test_predictions = f"{self.results_folder}/test_predictions/"
         self.lr_scheduler = None
         self.cls_weights = None
-        self.train_weights = train_weights
-        self.test_weights = test_weights
+        self.train_weights = config["train_weights"]
+        self.test_weights = config["test_weights"]
         self.detect_missing_folders()
         self.thresholds = thresholds(
             nn.Threshold(0.05, 0, inplace=in_place_flag),
@@ -97,7 +101,6 @@ class GnnPytorchBranchProbabilityModel(Model):
 
     def detect_missing_folders(self):
         test_if_present = [
-            self.training_logs,
             self.results_folder,
             self.train_predictions,
             self.test_predictions
@@ -107,7 +110,6 @@ class GnnPytorchBranchProbabilityModel(Model):
             if not os.path.exists(folder):
                 os.mkdir(folder)
                 print(f"Creating directory: {folder}")
-
 
     @staticmethod
     def process_data(data):
@@ -277,7 +279,7 @@ class GnnPytorchBranchProbabilityModel(Model):
         # if not data_train or data_valid:
         #     return
         # return self.__process_data(data_train), self.__process_data(data_valid)
-
+        # x = F.softmax(x)
     def _test_init(self):
         self.model.eval()
 
