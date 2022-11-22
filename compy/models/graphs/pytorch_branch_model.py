@@ -25,9 +25,28 @@ class Net(torch.nn.Module):
         in_channel = config["gnn_h_size"]
         branch_count = 1
 
-        self.reduce = nn.Linear(annotation_size, in_channel) #TODO: MLP -> Sequential(1,2,4,8 layer)
-        self.gg_conv_1 = GatedGraphConv(in_channel, sequence_length)
-        self.lin = nn.Linear(in_channel, branch_count) #TODO: MLP -> Sequential(1,2,4,8 layer)
+        self.gg_conv = GatedGraphConv(in_channel, sequence_length)
+        self.reduce, self.lin = self.generate_sequential_layers(config, annotation_size, in_channel, branch_count)
+
+    @staticmethod
+    def generate_sequential_layers(config, original_annotation_size, ggn_input_size, branch_count_size):
+        activation_function = config["linear_activation"]
+        num_linear_layers = config["num_linear_layers"]
+        reduce_sequence, classifier_sequence = [], []
+
+        for index in range(num_linear_layers - 1):
+            reduce_sequence.append(nn.Linear(original_annotation_size, original_annotation_size))
+            reduce_sequence.append(activation_function())
+            classifier_sequence.append(nn.Linear(ggn_input_size, ggn_input_size))
+            classifier_sequence.append(activation_function())
+
+        reduce_sequence.append(nn.Linear(original_annotation_size, ggn_input_size))
+        reduce_sequence.append(activation_function())
+
+        classifier_sequence.append(nn.Linear(ggn_input_size, branch_count_size))
+        classifier_sequence.append(activation_function())
+
+        return nn.Sequential(*reduce_sequence), nn.Sequential(*classifier_sequence)
 
     def forward(
             self, graph, dimension=0,
@@ -41,7 +60,7 @@ class Net(torch.nn.Module):
         idx = torch.add(index, offsets_per_index)
 
         x = self.reduce(x)
-        x = self.gg_conv_1(x, edge_index)
+        x = self.gg_conv(x, edge_index)
         x = torch.sigmoid(x)
 
         x = torch.index_select(x, dimension, idx)
@@ -70,6 +89,8 @@ class GnnPytorchBranchProbabilityModel(Model):
                 "num_edge_types": 5,
                 "results_dir": default_path,
                 "folder_name": self.date,
+                "linear_activation": nn.Sigmoid,
+                "num_linear_layers": 1,
             }
         super().__init__(config)
 
@@ -280,6 +301,7 @@ class GnnPytorchBranchProbabilityModel(Model):
         #     return
         # return self.__process_data(data_train), self.__process_data(data_valid)
         # x = F.softmax(x)
+
     def _test_init(self):
         self.model.eval()
 

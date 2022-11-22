@@ -4,6 +4,8 @@ import datetime
 import torch.utils.data
 import tqdm
 
+from torch import nn
+
 from sklearn.model_selection import StratifiedKFold
 
 from compy import models as M
@@ -164,6 +166,8 @@ model_config = {
     "num_epochs": 1,
     "num_edge_types": 5,
     "results_dir": out_dir,
+    "linear_activation": nn.Sigmoid,
+    "num_linear_layers": 8,
 }
 
 combinations = [
