@@ -1,17 +1,11 @@
 import os
 import shutil
 import datetime
-import pickle
-import numpy as np
 import torch.utils.data
 import tqdm
-from absl import flags
-from absl import app
-from collections import  namedtuple
 
 from sklearn.model_selection import StratifiedKFold
 
-from compy import datasets as D
 from compy import models as M
 from compy import representations as R
 from compy.representations.extractors import ClangDriver
@@ -140,11 +134,11 @@ def split_dataset(dataset):
     return training_set, validation_set
 
 
-def move_results(training_model, results_path, configurations_length):
+def move_results(training_model, exploration_path, configurations_length):
     if configurations_length < 2:
         return
     try:
-        shutil.move(training_model.results_folder, results_path)
+        shutil.move(training_model.results_folder, exploration_path)
     except FileNotFoundError:
         print(f"An error occurred while trying to move the result files of model {training_model.results_folder}")
 
@@ -159,13 +153,11 @@ def setup_exploration_folder_structure(configuration_amount, out_dir, exploratio
 
 
 out_dir = os.environ.get("out_dir")
-exploration_dir = os.environ.get("exploration_results")
-out_dir = out_dir if out_dir else f"{os.path.expanduser('~')}/training-logs/"
-num_types = dataset.num_types
+exploration_dir = os.environ.get("exploration_dir")
 
 model_config = {
     "num_layers": 8,
-    "hidden_size_orig": num_types,
+    "hidden_size_orig": dataset.num_types,
     "gnn_h_size": 80,
     "learning_rate": 0.0001,
     "batch_size": 128, # Maybe increase this size
