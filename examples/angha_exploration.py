@@ -1,11 +1,12 @@
 import os
+import tqdm
+import json
 import shutil
 import datetime
+import numpy as np
 import torch.utils.data
-import tqdm
 
 from torch import nn
-
 from sklearn.model_selection import StratifiedKFold
 
 from compy import models as M
@@ -22,13 +23,6 @@ from compy.datasets.dataflow_preprocess import main as dataflow_main
 # FLAGS.preprocess = True
 # FLAGS.eliminate_data_duplicates = True
 # FLAGS.debug = False
-
-# Load dataset
-ANGHA_FLAG = True
-PREPROCESS_FLAG = not ANGHA_FLAG
-
-dataset = AnghabenchGraphDataset(non_empty=True)
-
 
 def recompute_branch_weights(training_subset, test_subset, batch_size=512, num_workers=3):
     max_branch_length = 101
@@ -136,11 +130,24 @@ def split_dataset(dataset):
     return training_set, validation_set
 
 
-def move_results(training_model, exploration_path, configurations_length):
+def move_results(training_model, exploration_path, configurations_length, model_config):
+    train_weights = model_config["train_weights"].cpu().numpy()
+    test_weights = model_config["test_weights"].cpu().numpy()
+
+    train_weights = np.unique(train_weights)
+    test_weights = np.unique(test_weights)
+    del model_config["train_weights"]
+    del model_config["test_weights"]
+    model_config["unique_train_weights"] = train_weights.tolist()
+    model_config["unique_test_weights"] = test_weights.tolist()
+
     if configurations_length < 2:
         return
     try:
         shutil.move(training_model.results_folder, exploration_path)
+        config_path = os.path.join(exploration_path, training_model.date, "model_config.json")
+        with open(config_path, "w") as file:
+            json.dump(str(model_config), file)
     except FileNotFoundError:
         print(f"An error occurred while trying to move the result files of model {training_model.results_folder}")
 
@@ -154,10 +161,37 @@ def setup_exploration_folder_structure(configuration_amount, out_dir, exploratio
         return store_path
 
 
+def create_model_configurations(dataset, model_configs="exploration_config.json"):
+    config_path = os.path.join(dataset.dataset_info_path, model_configs)
+    configurations = []
+
+    with open(config_path, "r") as file_handle:
+        configs = json.load(file_handle)
+    propagation_reach = configs["propagation_reach"]
+    mlp_length = configs["mlp_length"]
+    input_size = configs["input_size"]
+    for reach, length, size in zip(propagation_reach, mlp_length, input_size):
+        configurations.append({
+            "num_layers": reach,
+            "hidden_size_orig": dataset.num_types,
+            "gnn_h_size": size,
+            "learning_rate": 0.0001,
+            "batch_size": 128, # Maybe increase this size
+            "num_epochs": 1,
+            "num_edge_types": 5,
+            "results_dir": out_dir,
+            "linear_activation": nn.Sigmoid,
+            "num_linear_layers": length,
+        })
+    return configurations
+
+
+dataset = AnghabenchGraphDataset(non_empty=True)
+
 out_dir = os.environ.get("out_dir")
 exploration_dir = os.environ.get("exploration_dir")
 
-model_config = {
+model_conf = {
     "num_layers": 8,
     "hidden_size_orig": dataset.num_types,
     "gnn_h_size": 80,
@@ -174,9 +208,7 @@ combinations = [
     (R.LLVMGraphBuilder, R.LLVMBPVisitor, M.GnnPytorchBranchProbabilityModel),
 ]
 
-configurations = [
-    model_config, model_config, model_config
-]
+configurations = create_model_configurations(dataset)
 
 config_length = len(configurations)
 exploration_dir = setup_exploration_folder_structure(config_length, out_dir, exploration_dir)
@@ -208,6 +240,6 @@ for builder, visitor, model in combinations:
             train_set,
             valid_set,
         )
-        move_results(branch_model, exploration_dir, config_length)
+        move_results(branch_model, exploration_dir, config_length, model_config)
 
         print(train_summary)
