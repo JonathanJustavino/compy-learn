@@ -1,8 +1,11 @@
+import gc
 import os
+import sys
 import tqdm
 import json
 import shutil
 import datetime
+from GPUtil import showUtilization as gpu_usage
 import numpy as np
 import torch.utils.data
 
@@ -157,75 +160,71 @@ def setup_exploration_folder_structure(configuration_amount, out_dir, exploratio
     if configuration_amount > 1:
         date = datetime.datetime.now().strftime("%d-%m-%Y--%H:%M:%S")
         store_path = os.path.join(store_path, f"explorations-{date}")
+        # temp_mirror_copy = os.path.join(store_path, f"explorations-{date}")
         os.mkdir(store_path)
+        # os.mkdir(temp_mirror_copy)
         return store_path
 
 
-def create_model_configurations(dataset, model_configs="exploration_config.json"):
+def create_model_configurations(config_nr, dataset, out_dir, model_configs="exploration_config.json"):
     config_path = os.path.join(dataset.dataset_info_path, model_configs)
-    configurations = []
 
     with open(config_path, "r") as file_handle:
-        configs = json.load(file_handle)
-    propagation_reach = configs["propagation_reach"]
-    mlp_length = configs["mlp_length"]
-    input_size = configs["input_size"]
-    for reach, length, size in zip(propagation_reach, mlp_length, input_size):
-        configurations.append({
-            "num_layers": reach,
-            "hidden_size_orig": dataset.num_types,
-            "gnn_h_size": size,
-            "learning_rate": 0.0001,
-            "batch_size": 128, # Maybe increase this size
-            "num_epochs": 1,
-            "num_edge_types": 5,
-            "results_dir": out_dir,
-            "linear_activation": nn.Sigmoid,
-            "num_linear_layers": length,
-        })
-    return configurations
+        configurations = json.load(file_handle)
+    propagation_reach = configurations["propagation_reach"][config_nr]
+    mlp_length = configurations["mlp_length"][config_nr]
+    input_size = configurations["input_size"][config_nr]
+
+    model_config = {
+        "num_layers": propagation_reach,
+        "hidden_size_orig": dataset.num_types,
+        "gnn_h_size": input_size,
+        "learning_rate": 0.0001,
+        "batch_size": 128, # Maybe increase this size
+        "num_epochs": 400,
+        "num_edge_types": 5,
+        "results_dir": out_dir,
+        "linear_activation": nn.Sigmoid,
+        "num_linear_layers": mlp_length,
+    }
+    return model_config
 
 
-dataset = AnghabenchGraphDataset(non_empty=True)
+def angha_exploration(config_number):
+    out_dir = os.environ.get("out_dir")
+    exploration_dir = os.environ.get("exploration_dir")
 
-out_dir = os.environ.get("out_dir")
-exploration_dir = os.environ.get("exploration_dir")
+    dataset = AnghabenchGraphDataset(non_empty=True)
 
-model_conf = {
-    "num_layers": 8,
-    "hidden_size_orig": dataset.num_types,
-    "gnn_h_size": 80,
-    "learning_rate": 0.0001,
-    "batch_size": 128, # Maybe increase this size
-    "num_epochs": 1,
-    "num_edge_types": 5,
-    "results_dir": out_dir,
-    "linear_activation": nn.Sigmoid,
-    "num_linear_layers": 8,
-}
+    combinations = [
+        (R.LLVMGraphBuilder, R.LLVMBPVisitor, M.GnnPytorchBranchProbabilityModel),
+    ]
 
-combinations = [
-    (R.LLVMGraphBuilder, R.LLVMBPVisitor, M.GnnPytorchBranchProbabilityModel),
-]
+    model_config = create_model_configurations(config_number, dataset, out_dir)
 
-configurations = create_model_configurations(dataset)
+    config_length = len(model_config)
 
-config_length = len(configurations)
-exploration_dir = setup_exploration_folder_structure(config_length, out_dir, exploration_dir)
+    # files = os.listdir(out_dir)
+    # create_structure = False
+    # for folder in files:
+    #     if "explorations" in folder:
+    #         create_structure = True
+    #         exploration_dir = folder
+    #         break
 
+    # if not create_structure:
+    exploration_dir = setup_exploration_folder_structure(config_length, out_dir, exploration_dir)
 
-for builder, visitor, model in combinations:
-    for model_config in configurations:
+    for builder, visitor, model in combinations:
 
-        clang_driver = ClangDriver(
-            ClangDriver.ProgrammingLanguage.C,
-            ClangDriver.OptimizationLevel.O3,
-            [],
-            [],
-        )
+        # clang_driver = ClangDriver(
+        #     ClangDriver.ProgrammingLanguage.C,
+        #     ClangDriver.OptimizationLevel.O3,
+        #     [],
+        #     [],
+        # )
 
-        kf = StratifiedKFold(n_splits=10, shuffle=True, random_state=204)
-        print(kf)
+        # kf = StratifiedKFold(n_splits=10, shuffle=True, random_state=204)
         # TODO: StratifiedKFold with target being tensors with multiple y values
         #      How to calculate the distribution, since sample holds multiple ys
 
@@ -243,3 +242,16 @@ for builder, visitor, model in combinations:
         move_results(branch_model, exploration_dir, config_length, model_config)
 
         print(train_summary)
+
+
+if __name__ == '__main__':
+    config_number = 0
+    config_number = int(sys.argv[2])
+    print("Config", config_number)
+    gpu_usage()
+    angha_exploration(config_number)
+    gpu_usage()
+    gc.collect()
+    torch.cuda.empty_cache()
+    gpu_usage()
+
