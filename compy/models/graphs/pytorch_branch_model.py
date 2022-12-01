@@ -108,6 +108,7 @@ class GnnPytorchBranchProbabilityModel(Model):
         self.optimizer_path = f"{self.date}_optimizer_state_dict"
         self.train_predictions = f"{self.results_folder}/train_predictions/"
         self.test_predictions = f"{self.results_folder}/test_predictions/"
+        self.valid_predictions = f"{self.results_folder}/test_predictions/"
         self.lr_scheduler = None
         self.cls_weights = None
         self.train_weights = config["train_weights"]
@@ -568,6 +569,64 @@ class GnnPytorchBranchProbabilityModel(Model):
             valid_summary.append(valid_accuracy)
 
         return train_summary, valid_summary
+
+    def predict_test_set(self, test_set, epoch=0):
+        test_summary = []
+        epoch_range = self.initialize_training(epoch)
+
+        batch_size = self.config["batch_size"]
+        loss_fn = weighted_mse
+        self._train_init()
+        test_loader = GeometricDataLoader(test_set, batch_size=batch_size, pin_memory=True)
+        total_test_iterations = len(test_loader)
+        valid_prediction_path = self.valid_predictions
+
+        print(f"Total Epoch: {self.config['num_epochs']}, loss fn: {loss_fn.__name__}, batch size: {batch_size}")
+        print()
+        for epoch in range(1):
+            train_loss = 0
+            train_euclidean = 0
+            train_accuracy = [0., 0., 0.]
+            train_tp_fp_tn_fn_labels = [0, 0, 0, 0]
+
+            print("Epoch", epoch)
+            # Test Set
+            self._test_init()
+
+            valid_loss = 0
+            valid_euclidean = 0
+            valid_accuracy = [0., 0., 0.]
+            valid_tp_fp_tn_fn_labels = [0, 0, 0, 0]
+
+            for index, batch in enumerate(test_loader):
+                batch_branches = len(batch.y)
+                valid_batch_loss, mispredicted_in_batch, euclidean_distance, valid_batch_labels = self._predict_with_batch(batch, loss_fn, valid_prediction_path, batch_nr=index, epoch=epoch)
+
+                valid_loss, valid_accuracy, valid_euclidean = self.add_metrics(valid_loss, valid_accuracy, valid_euclidean, valid_batch_loss, mispredicted_in_batch, euclidean_distance)
+                valid_tp_fp_tn_fn_labels = self.add_labels(valid_tp_fp_tn_fn_labels, valid_batch_labels)
+
+                batch_accuracy = (batch_branches - mispredicted_in_batch[0]) / batch_branches
+                batch_loss = valid_loss / batch_branches
+                batch_euclidean = euclidean_distance / batch_branches
+
+                print(f"Epoch: {epoch} - Validation Iteration {index + 1}/{total_test_iterations} batch accuracy: {batch_accuracy}, batch loss: {batch_loss}, euclidean distance: {batch_euclidean}")
+
+            train_accuracy, test_accuracy, train_loss, valid_loss, train_euclidean, valid_euclidean = self.compute_epoch_accuracy(train_accuracy, valid_accuracy, train_loss, valid_loss, train_euclidean, valid_euclidean, data_train, data_valid)
+
+            validation_log = self._store_epoch_data(epoch, loss_fn, valid_loss, valid_accuracy, valid_euclidean, valid_tp_fp_tn_fn_labels, log_type='valid')
+
+            self.write_to_log(validation_log)
+
+            if epoch > 100 and epoch % 100 == 0 or epoch == epoch_range:
+                print("Saving Model")
+                self.save_model()
+
+            print(
+                f"epoch: {epoch}, train_loss: {valid_loss}, test_accuracy: {valid_accuracy[0]}"
+            )
+
+            test_summary.append(valid_accuracy)
+        return test_summary
 
 
 def r2_score(prediction, ground_truth):
