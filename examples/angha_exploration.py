@@ -129,8 +129,9 @@ def split_dataset(dataset):
 
     training_set = torch.utils.data.Subset(dataset, train_samples)
     validation_set = torch.utils.data.Subset(dataset, validation_samples)
+    test_set = torch.utils.data.Subset(dataset, test_samples)
 
-    return training_set, validation_set
+    return training_set, validation_set, test_set
 
 
 def move_results(training_model, exploration_path, configurations_length, model_config):
@@ -228,7 +229,7 @@ def angha_exploration(config_number):
         # TODO: StratifiedKFold with target being tensors with multiple y values
         #      How to calculate the distribution, since sample holds multiple ys
 
-        train_set, valid_set = split_dataset(dataset)
+        train_set, valid_set, test_set = split_dataset(dataset)
         train_weights, test_weights = lookup_branch_weights(train_set, valid_set, dataset)
 
         model_config["train_weights"] = train_weights
@@ -239,9 +240,11 @@ def angha_exploration(config_number):
             train_set,
             valid_set,
         )
+        test_summary = branch_model.predict_test_set(test_set)
         move_results(branch_model, exploration_dir, config_length, model_config)
 
         print(train_summary)
+        print(test_summary)
 
 
 if __name__ == '__main__':
