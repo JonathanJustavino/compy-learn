@@ -1,6 +1,5 @@
 import gc
 import os
-import sys
 import tqdm
 import json
 import shutil
@@ -10,7 +9,6 @@ import numpy as np
 import torch.utils.data
 
 from torch import nn
-from sklearn.model_selection import StratifiedKFold
 
 from compy import models as M
 from compy import representations as R
@@ -27,12 +25,26 @@ from compy.datasets.dataflow_preprocess import main as dataflow_main
 # FLAGS.eliminate_data_duplicates = True
 # FLAGS.debug = False
 
-def recompute_branch_weights(training_subset, test_subset, batch_size=512, num_workers=3):
+def accumulate_branch_count(weights, dataloader, max_branch_length):
+    total_branch_count = 0
+    for sample in tqdm.tqdm(dataloader):
+        sample = sample.cuda()
+        target = sample.y * 100
+        target = target.int()
+        train_bincount = torch.bincount(target.view(-1), minlength=max_branch_length).int()
+        weights += train_bincount
+        total_branch_count += len(sample.y)
+    return total_branch_count, weights
+
+
+def recompute_branch_weights(training_subset, validation_subset, test_subset, batch_size=512, num_workers=3):
     max_branch_length = 101
     training_weights = torch.zeros(max_branch_length).cuda()
+    validation_weights = torch.zeros(max_branch_length).cuda()
     testing_weights = torch.zeros(max_branch_length).cuda()
 
     train_loader = GeometricDataLoader(training_subset, batch_size=batch_size, num_workers=num_workers)
+    valid_loader = GeometricDataLoader(validation_subset, batch_size=batch_size, num_workers=num_workers)
     test_loader = GeometricDataLoader(test_subset, batch_size=batch_size, num_workers=num_workers)
 
     if not torch.cuda.is_available():
@@ -40,28 +52,16 @@ def recompute_branch_weights(training_subset, test_subset, batch_size=512, num_w
         exit()
 
     print("Computing amount of train and test branches")
-    train_branch_count = 0
-    for sample in tqdm.tqdm(train_loader):
-        sample = sample.cuda()
-        target = sample.y * 100
-        target = target.int()
-        train_bincount = torch.bincount(target.view(-1), minlength=max_branch_length).int()
-        training_weights += train_bincount
-        train_branch_count += len(sample.y)
-
-    test_branch_count = 0
-    for sample in tqdm.tqdm(test_loader):
-        sample = sample.cuda()
-        target = sample.y * 100
-        target = target.int()
-        test_bincount = torch.bincount(target.view(-1), minlength=max_branch_length).int()
-        testing_weights += test_bincount
-        test_branch_count += len(sample.y)
+    train_branch_count, training_weights = accumulate_branch_count(training_weights, train_loader, max_branch_length)
+    valid_branch_count, validation_weights = accumulate_branch_count(validation_weights, valid_loader, max_branch_length)
+    test_branch_count, testing_weights = accumulate_branch_count(testing_weights, test_loader, max_branch_length)
 
     total_train_probabilities = sum(training_weights).int().item()
+    total_valid_probabilities = sum(validation_weights).int().item()
     total_test_probabilities = sum(testing_weights).int().item()
 
     training_weights = training_weights.div(total_train_probabilities)
+    validation_weights = training_weights.div(total_valid_probabilities)
     testing_weights = testing_weights.div(total_test_probabilities)
     classes = [0, 3, 37, 50, 62, 96, 100]
     class_count = len(classes)
@@ -69,14 +69,16 @@ def recompute_branch_weights(training_subset, test_subset, batch_size=512, num_w
     for index in classes:
         training_weights[index] = 1 / class_count
         testing_weights[index] = 1 / class_count
+        validation_weights[index] = 1 / class_count
 
     total_train_branches = round(total_train_probabilities / 2)
     total_test_branches = round(total_test_probabilities / 2)
+    total_valid_branches = round(total_test_probabilities / 2)
 
-    return training_weights, testing_weights, total_train_branches, total_test_branches
+    return training_weights, validation_weights, testing_weights, total_train_branches, total_valid_branches, total_test_branches
 
 
-def lookup_branch_weights(training_subset, test_subset, dataset, cache_path="cache/cached_weights.pt", recompute=False):
+def lookup_branch_weights(training_subset, validation_subset, test_subset, dataset, cache_path="cache/cached_weights.pt", recompute=False):
     cache_path = f"{dataset.dataset_info_path}/{cache_path}"
     cache_exists = os.path.exists(cache_path)
     train_indices = []
@@ -86,39 +88,47 @@ def lookup_branch_weights(training_subset, test_subset, dataset, cache_path="cac
         print("Using cached weights")
         cached_weights = torch.load(cache_path)
         train_weights = cached_weights["train_weights"]
+        valid_weights = cached_weights["valid_weights"]
         test_weights = cached_weights["test_weights"]
         train_indices = cached_weights["train_indices"]
+        valid_indices = cached_weights["valid_indices"]
         test_indices = cached_weights["test_indices"]
         total_train_branches = cached_weights["total_train_branches"]
+        total_valid_branches = cached_weights["total_valid_branches"]
         total_test_branches = cached_weights["total_test_branches"]
 
-    if recompute or not (train_indices == training_subset.indices and test_indices == test_subset.indices):
-        train_weights, test_weights, total_train_branches, total_test_branches = recompute_branch_weights(training_subset, test_subset, batch_size=512, num_workers=3)
+    if recompute or not (train_indices == training_subset.indices and test_indices == test_subset.indices and valid_indices == validation_subset.indices):
+        train_weights, valid_weights, test_weights, total_train_branches, total_valid_branches, total_test_branches = recompute_branch_weights(training_subset, validation_subset, test_subset, batch_size=512, num_workers=3)
 
         print("Caching results")
         new_weights = {
             'train_weights': train_weights,
+            'valid_weights': valid_weights,
             'test_weights': test_weights,
             'train_indices': training_subset.indices,
+            'valid_indices': validation_subset.indices,
             'test_indices': test_subset.indices,
             'total_train_branches': total_train_branches,
+            'total_valid_branches': total_valid_branches,
             'total_test_branches': total_test_branches
         }
 
         torch.save(new_weights, cache_path)
 
     setattr(training_subset, 'total_branches', total_train_branches)
+    setattr(validation_subset, 'total_branches', total_valid_branches)
     setattr(test_subset, 'total_branches', total_test_branches)
 
     print(f"Amount of training branches {total_train_branches}\n"
+          f"Amount of valid branches {total_valid_branches}\n"
           f"Amount of test branches {total_test_branches}")
 
-    return train_weights, test_weights
+    return train_weights, valid_weights, test_weights
 
 
 def split_dataset(dataset):
     amount_samples = dataset.total_num_samples
-    amount_samples = amount_samples
+    amount_samples = amount_samples // 900
     test_range = round(float(amount_samples) * 0.1)
     valid_range = round(float(amount_samples) * 0.1)
     train_range = round(amount_samples - (test_range + valid_range))
@@ -136,13 +146,17 @@ def split_dataset(dataset):
 
 def move_results(training_model, exploration_path, configurations_length, model_config):
     train_weights = model_config["train_weights"].cpu().numpy()
+    valid_weights = model_config["valid_weights"].cpu().numpy()
     test_weights = model_config["test_weights"].cpu().numpy()
 
     train_weights = np.unique(train_weights)
+    valid_weights = np.unique(test_weights)
     test_weights = np.unique(test_weights)
     del model_config["train_weights"]
+    del model_config["valid_weights"]
     del model_config["test_weights"]
     model_config["unique_train_weights"] = train_weights.tolist()
+    model_config["unique_valid_weights"] = valid_weights.tolist()
     model_config["unique_test_weights"] = test_weights.tolist()
 
     if configurations_length < 2:
@@ -174,15 +188,15 @@ def create_model_configurations(config_nr, dataset, out_dir, model_configs="expl
         configurations = json.load(file_handle)
     propagation_reach = configurations["propagation_reach"][config_nr]
     mlp_length = configurations["mlp_length"][config_nr]
-    input_size = configurations["input_size"][config_nr]
+    hidden_size = configurations["input_size"][config_nr]
 
     model_config = {
         "num_layers": propagation_reach,
         "hidden_size_orig": dataset.num_types,
-        "gnn_h_size": input_size,
+        "gnn_h_size": hidden_size,
         "learning_rate": 0.0001,
-        "batch_size": 128, # Maybe increase this size
-        "num_epochs": 400,
+        "batch_size": 64, # Maybe increase this size
+        "num_epochs": 1,
         "num_edge_types": 5,
         "results_dir": out_dir,
         "linear_activation": nn.Sigmoid,
@@ -230,9 +244,10 @@ def angha_exploration(config_number):
         #      How to calculate the distribution, since sample holds multiple ys
 
         train_set, valid_set, test_set = split_dataset(dataset)
-        train_weights, test_weights = lookup_branch_weights(train_set, valid_set, dataset)
+        train_weights, valid_weights, test_weights = lookup_branch_weights(train_set, valid_set, test_set, dataset)
 
         model_config["train_weights"] = train_weights
+        model_config["valid_weights"] = valid_weights
         model_config["test_weights"] = test_weights
 
         branch_model = model(config=model_config)
@@ -241,17 +256,18 @@ def angha_exploration(config_number):
             valid_set,
         )
         test_summary = branch_model.predict_test_set(test_set)
-        move_results(branch_model, exploration_dir, config_length, model_config)
-
         print(train_summary)
         print(test_summary)
 
+        exit()
+        move_results(branch_model, exploration_dir, config_length, model_config)
+
+
 
 if __name__ == '__main__':
-    config_number = 0
-    config_number = int(sys.argv[2])
-    print("Config", config_number)
-    gpu_usage()
+    config_number = 2
+    # config_number = int(sys.argv[2])
+    print("\n\nConfig\n\n", config_number)
     angha_exploration(config_number)
     gpu_usage()
     gc.collect()
