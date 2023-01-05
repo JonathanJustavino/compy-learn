@@ -278,6 +278,8 @@ void ClangDriver::runLLVMPasses(std::unique_ptr<::llvm::Module> Module,
     initializeMemorySSAWrapperPassPass(reg);
     initializeStripSymbolsPass(reg);
     initializeLowerSwitchPass(reg);
+    initializePGOInstrumentationGenLegacyPassPass(reg);
+    initializePGOInstrumentationUseLegacyPassPass(reg);
     initializeBranchProbabilityInfoWrapperPassPass(reg);
 
     // Setup the pass manager and add passes.

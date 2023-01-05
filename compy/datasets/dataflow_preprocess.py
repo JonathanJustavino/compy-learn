@@ -12,6 +12,7 @@ from absl import app
 from absl import flags
 
 from compy.datasets import anghabench
+from compy.datasets import llvm_dataset
 import compy.representations as R
 from compy.representations.extractors import ClangDriver
 from compy.datasets.utils.pickle_filename import get_pickle_filename
@@ -39,6 +40,7 @@ flags.DEFINE_bool('eliminate_data_duplicates', False, 'Eliminate duplicates base
 
 
 dataset_path = '/home/john/Documents/workspace/Studium/Masterarbeit/angha_dataset/ExtractGraphsTask/'
+dataset_path = '/net/media/scratch/luederitz/llvm_dataset'
 
 flags.DEFINE_string('out_dir', '', 'Root dir to store the results.')
 flags.DEFINE_bool('debug', False, 'Single-process mode for debugging.')
@@ -108,7 +110,8 @@ class MultiProcessedTask(object):
 class ExtractGraphsTask(MultiProcessedTask):
     def __init__(self, base_dir, num_processes, num_tasks, previous_task=None, verbose=False):
         super().__init__(base_dir, num_processes, num_tasks, previous_task, verbose)
-        self.dataset = anghabench.AnghabenchDataset()
+        # self.dataset = anghabench.AnghabenchDataset()
+        self.dataset = llvm_dataset.LLVMDataset()
 
     def _load_tasks(self):
         num_samples = self.dataset.get_size()
@@ -137,11 +140,18 @@ class ExtractGraphsTask(MultiProcessedTask):
         sys.stderr = open(os.path.join(log_dir, "%d.stderr" % idx), "a")
 
     def __extract_graphs(self, start_at, num_samples):
+        build_path = "/tmp/pgo_clang/stage2-prof-gen/"
+        profiles_path = "/tmp/pgo_clang/stage2-prof-gen/profiles/clang.profdata"
+        profiles_cmd = f"-fprofile-use={profiles_path}"
+        additional_include_dirs = self.dataset.get_include_paths()
+        include_dirs = [(directory, ClangDriver.IncludeDirType.User) for directory in additional_include_dirs]
+        compiler_flags = [profiles_cmd]
+
         clang_driver = ClangDriver(
             ClangDriver.ProgrammingLanguage.C,
             ClangDriver.OptimizationLevel.O0,
-            [],
-            []
+            include_dirs,
+            compiler_flags
         )
 
         data = self.dataset.preprocess(R.LLVMGraphBuilder(clang_driver),
