@@ -22,6 +22,7 @@ class LLVMDataset(dataset.Dataset):
 
         uri = "https://github.com/llvm/llvm-project.git"
         self.clone_git(uri)
+        self.additional_include_basepath = os.path.join(self.content_dir, "/tmp/pgo_clang/stage2-prof-gen")
 
     def get_size(self):
         print(self.content_dir)
@@ -91,3 +92,11 @@ class LLVMDataset(dataset.Dataset):
             ],
             "num_types": builder.num_tokens(),
         }
+
+    def get_include_paths(self):
+        includes = []
+        header_ext = ".h"
+        for root, dirs, files in os.walk(self.additional_include_basepath):
+            if any(header_ext in file for file in files):
+                includes.append(root)
+        return includes
