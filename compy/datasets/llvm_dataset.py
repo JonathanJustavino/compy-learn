@@ -150,6 +150,7 @@ class LLVMDataset(Dataset):
                         pickle.dump(total, f)
             print("Loading non empty samples")
             self.total_num_samples = len(self.non_empty_samples)
+            self.get = self.get_from_filtered
         if not non_empty:
             self.get = self.get_from_unfiltered
         super().__init__(self.root)
@@ -168,6 +169,9 @@ class LLVMDataset(Dataset):
     def get_from_unfiltered(self, index):
         return torch.load(f"{self.processed_dir}/graph_{index}.pt")
 
+    def get_from_filtered(self, index):
+        return torch.load(f"{self.processed_dir}/graph_{self.non_empty_samples[index]}.pt")
+
     def len(self):
         return self.total_num_samples
 
@@ -175,7 +179,8 @@ class LLVMDataset(Dataset):
         return self.total_num_samples
 
     def get(self, index):
-        return torch.load(f"{self.processed_dir}/graph_{self.non_empty_samples[index]}.pt")
+        # return torch.load(f"{self.processed_dir}/graph_{self.non_empty_samples[index]}.pt")
+        raise NotImplemented
 
     @property
     def total_branches(self):
@@ -254,6 +259,7 @@ class LLVMDataset(Dataset):
             along_dimension = 0
             source_nodes = np.delete(source_nodes, drop_idxs, along_dimension)
             source_nodes = torch.tensor(source_nodes)
+            source_nodes = source_nodes.int()
 
             x = torch.tensor(one_hot, dtype=torch.float)
 
@@ -321,17 +327,17 @@ class LLVMDataset(Dataset):
 
     def filter_empty_sample(self, files):
         index, split = files
-        non_empty = []
+        empty_samples = []
         for idx in tqdm(split, total=len(split), desc=f"Processing {index}", disable=False):
             sample = self.get_from_unfiltered(idx)
             target = sample.y
             if len(target) > 0:
                 continue
-            non_empty.append(idx)
-        return non_empty
+            empty_samples.append(idx)
+        return empty_samples
 
     def post_process(self, files=[]):
-        threads = 8
+        threads = 1
         if len(files) <= 0:
             files = [self.get_file_idx_from_name(sample) for sample in self.processed_file_names]
 
