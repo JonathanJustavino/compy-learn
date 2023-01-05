@@ -227,6 +227,7 @@ def generate_csv():
                     writer.writerow([item] + percent_count + lr_ratio)
                     index += 1
 
+
 def compute_num_type_stats():
     max_num_types = 0
     store_data = {}
@@ -256,3 +257,22 @@ def compute_num_type_stats():
 
     with open(filename, "rb") as f:
         pickle.dump(store_data, f)
+
+
+def split_dataset(dataset, subsample=0):
+    amount_samples = dataset.total_num_samples
+    if subsample:
+        amount_samples = amount_samples // subsample
+    test_range = round(float(amount_samples) * 0.1)
+    valid_range = round(float(amount_samples) * 0.1)
+    train_range = round(amount_samples - (test_range + valid_range))
+
+    train_samples = [index for index in range(0, train_range)]
+    validation_samples = [index for index in range(train_range, (train_range + valid_range))]
+    test_samples = [index for index in range((train_range + valid_range), amount_samples)]
+
+    training_set = torch.utils.data.Subset(dataset, train_samples)
+    validation_set = torch.utils.data.Subset(dataset, validation_samples)
+    test_set = torch.utils.data.Subset(dataset, test_samples)
+
+    return training_set, validation_set, test_set
