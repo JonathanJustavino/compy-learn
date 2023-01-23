@@ -16,6 +16,7 @@ from compy.representations.extractors import ClangDriver
 from compy.datasets.anghabench_graph import AnghabenchGraphDataset
 from torch_geometric.loader import DataLoader as GeometricDataLoader
 from compy.datasets import dataflow_preprocess
+from compy.datasets.utils.dataset_stats import split_dataset
 from compy.datasets.dataflow_preprocess import main as dataflow_main
 
 
@@ -56,24 +57,25 @@ def recompute_branch_weights(training_subset, validation_subset, test_subset, ba
     valid_branch_count, validation_weights = accumulate_branch_count(validation_weights, valid_loader, max_branch_length)
     test_branch_count, testing_weights = accumulate_branch_count(testing_weights, test_loader, max_branch_length)
 
-    total_train_probabilities = sum(training_weights).int().item()
-    total_valid_probabilities = sum(validation_weights).int().item()
-    total_test_probabilities = sum(testing_weights).int().item()
+    total_train_probabilities = training_weights.sum()
+    total_valid_probabilities = validation_weights.sum()
+    total_test_probabilities = testing_weights.sum()
 
     training_weights = training_weights.div(total_train_probabilities)
-    validation_weights = training_weights.div(total_valid_probabilities)
+    validation_weights = validation_weights.div(total_valid_probabilities)
     testing_weights = testing_weights.div(total_test_probabilities)
     classes = [0, 3, 37, 50, 62, 96, 100]
-    class_count = len(classes)
+
+    # class_count = len(classes)
 
     for index in classes:
-        training_weights[index] = 1 / class_count
-        testing_weights[index] = 1 / class_count
-        validation_weights[index] = 1 / class_count
+        training_weights[index] = 1.0 / training_weights[index]
+        validation_weights[index] = 1.0 / validation_weights[index]
+        testing_weights[index] = 1.0 / testing_weights[index]
 
-    total_train_branches = round(total_train_probabilities / 2)
-    total_test_branches = round(total_test_probabilities / 2)
-    total_valid_branches = round(total_test_probabilities / 2)
+    total_train_branches = round(total_train_probabilities.item() / 2)
+    total_test_branches = round(total_test_probabilities.item() / 2)
+    total_valid_branches = round(total_test_probabilities.item() / 2)
 
     return training_weights, validation_weights, testing_weights, total_train_branches, total_valid_branches, total_test_branches
 
@@ -126,23 +128,22 @@ def lookup_branch_weights(training_subset, validation_subset, test_subset, datas
     return train_weights, valid_weights, test_weights
 
 
-def split_dataset(dataset):
-    amount_samples = dataset.total_num_samples
-    amount_samples = amount_samples // 900
-    test_range = round(float(amount_samples) * 0.1)
-    valid_range = round(float(amount_samples) * 0.1)
-    train_range = round(amount_samples - (test_range + valid_range))
-
-    train_samples = [index for index in range(0, train_range)]
-    validation_samples = [index for index in range(0, valid_range)]
-    test_samples = [index for index in range(train_range, amount_samples)]
-
-    training_set = torch.utils.data.Subset(dataset, train_samples)
-    validation_set = torch.utils.data.Subset(dataset, validation_samples)
-    test_set = torch.utils.data.Subset(dataset, test_samples)
-
-    return training_set, validation_set, test_set
-
+# def split_dataset(dataset):
+#     amount_samples = dataset.total_num_samples
+#     amount_samples = amount_samples // 900
+#     test_range = round(float(amount_samples) * 0.1)
+#     valid_range = round(float(amount_samples) * 0.1)
+#     train_range = round(amount_samples - (test_range + valid_range))
+#
+#     train_samples = [index for index in range(0, train_range)]
+#     validation_samples = [index for index in range(0, valid_range)]
+#     test_samples = [index for index in range(train_range, amount_samples)]
+#
+#     training_set = torch.utils.data.Subset(dataset, train_samples)
+#     validation_set = torch.utils.data.Subset(dataset, validation_samples)
+#     test_set = torch.utils.data.Subset(dataset, test_samples)
+#
+#     return training_set, validation_set, test_set
 
 def move_results(training_model, exploration_path, configurations_length, model_config):
     train_weights = model_config["train_weights"].cpu().numpy()
@@ -196,7 +197,7 @@ def create_model_configurations(config_nr, dataset, out_dir, model_configs="expl
         "gnn_h_size": hidden_size,
         "learning_rate": 0.0001,
         "batch_size": 64, # Maybe increase this size
-        "num_epochs": 1,
+        "num_epochs": 300,
         "num_edge_types": 5,
         "results_dir": out_dir,
         "linear_activation": nn.Sigmoid,
@@ -218,14 +219,6 @@ def angha_exploration(config_number):
     model_config = create_model_configurations(config_number, dataset, out_dir)
 
     config_length = len(model_config)
-
-    # files = os.listdir(out_dir)
-    # create_structure = False
-    # for folder in files:
-    #     if "explorations" in folder:
-    #         create_structure = True
-    #         exploration_dir = folder
-    #         break
 
     # if not create_structure:
     exploration_dir = setup_exploration_folder_structure(config_length, out_dir, exploration_dir)
@@ -261,7 +254,6 @@ def angha_exploration(config_number):
 
         exit()
         move_results(branch_model, exploration_dir, config_length, model_config)
-
 
 
 if __name__ == '__main__':
